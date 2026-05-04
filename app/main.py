@@ -210,19 +210,19 @@ async def _call_clipper(
     file_path: str,
     segments: list[ClipSegment],
 ) -> bytes:
-    """clipper の /clip を呼び出し（multipart upload モード）."""
+    """clipper の /clip を呼び出し（file_path モード）."""
+    payload = {
+        "file_path": file_path,
+        "segments": [s.model_dump() for s in segments],
+        "output_format": "mp4",
+    }
+
     async with _get_http_client() as client:
         try:
-            with open(file_path, "rb") as f:
-                files = {"file": (Path(file_path).name, f, "video/mp4")}
-                data = {
-                    "segments": json.dumps([s.model_dump() for s in segments]),
-                }
-                resp = await client.post(
-                    f"{CLIPPER_URL}/clip",
-                    files=files,
-                    data=data,
-                )
+            resp = await client.post(
+                f"{CLIPPER_URL}/clip",
+                json=payload,
+            )
         except httpx.RequestError as e:
             raise HTTPException(
                 status_code=502,

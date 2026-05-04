@@ -56,6 +56,10 @@ volumes:
 # analyzer (splatoon-battle-analyzer)
 volumes:
   - shared-data:/shared-data
+
+# clipper (movie-edit-pilot)
+volumes:
+  - shared-data:/shared-data
 ```
 
 ボリュームは external として定義し、事前に作成しておく:
@@ -72,8 +76,9 @@ docker volume create shared-data
 3. [orchestrator] ---(POST /analyze/highlights {file_path})---> [analyzer]
 4. [analyzer] ---(read file)---> /shared-data/uploads/
 5. [analyzer] ---(highlights[])---> [orchestrator]
-6. [orchestrator] ---(POST /clip multipart {file, segments})---> [clipper]
-7. [clipper] ---(mp4 binary)---> [orchestrator]
+6. [orchestrator] ---(POST /clip {file_path, segments})---> [clipper]
+7. [clipper] ---(read file)---> /shared-data/uploads/
+8. [clipper] ---(mp4 binary)---> [orchestrator]
 9. [orchestrator] ---(mp4 stream)---> [Web UI]
 10. [orchestrator] ---(delete file)---> /shared-data/uploads/
 ```
