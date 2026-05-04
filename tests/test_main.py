@@ -69,20 +69,22 @@ class TestHighlight:
         """正常パイプライン: analyzer → clipper → mp4 返却."""
         analyzer_response = {
             "video": "test.mp4",
+            "model": "gemini-2.5-flash",
             "highlights": [
                 {
-                    "start_time": 10.0,
-                    "end_time": 20.0,
+                    "start_seconds": 10.0,
+                    "end_seconds": 20.0,
+                    "peak_intensity": 8,
                     "description": "キル",
-                    "score": 8.0,
                 },
                 {
-                    "start_time": 45.0,
-                    "end_time": 55.0,
+                    "start_seconds": 45.0,
+                    "end_seconds": 55.0,
+                    "peak_intensity": 9,
                     "description": "ウルト",
-                    "score": 9.0,
                 },
             ],
+            "stage1_summary": {},
         }
         respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
             return_value=httpx.Response(200, json=analyzer_response)
@@ -140,9 +142,11 @@ class TestHighlight:
         """clipper がエラーを返した場合は 502."""
         analyzer_response = {
             "video": "test.mp4",
+            "model": "gemini-2.5-flash",
             "highlights": [
-                {"start_time": 10.0, "end_time": 20.0},
+                {"start_seconds": 10.0, "end_seconds": 20.0},
             ],
+            "stage1_summary": {},
         }
         respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
             return_value=httpx.Response(200, json=analyzer_response)

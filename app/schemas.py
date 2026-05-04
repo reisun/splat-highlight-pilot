@@ -41,10 +41,10 @@ class AnalyzerOptions(BaseModel):
 class AnalyzerHighlight(BaseModel):
     """analyzer レスポンス内のハイライト情報."""
 
-    start_time: float
-    end_time: float
-    description: str | None = None
-    score: float | None = None
+    start_seconds: float
+    end_seconds: float
+    peak_intensity: int = 0
+    description: str = ""
 
 
 class AnalyzerResponse(BaseModel):
@@ -52,7 +52,10 @@ class AnalyzerResponse(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    video: str = ""
+    model: str = ""
     highlights: list[AnalyzerHighlight] = Field(default_factory=list)
+    stage1_summary: dict = Field(default_factory=dict)
 
 
 # --- Clipper 関連 ---
