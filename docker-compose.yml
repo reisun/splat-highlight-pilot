@@ -7,14 +7,8 @@ services:
       - shared-data:/shared-data
     env_file:
       - .env
-    networks:
-      - llm-network
     restart: unless-stopped
 
 volumes:
   shared-data:
-    external: true
-
-networks:
-  llm-network:
     external: true
