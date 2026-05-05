@@ -17,8 +17,9 @@ from starlette.background import BackgroundTask
 
 from app.schemas import (
     AnalyzerHighlight,
+    AnalyzerJobResponse,
+    AnalyzerJobStatus,
     AnalyzerOptions,
-    AnalyzerResponse,
     ClipSegment,
     ErrorResponse,
     HealthResponse,
@@ -137,8 +138,8 @@ async def ws_highlight(websocket: WebSocket) -> None:
                     )
 
         await websocket.send_json({"type": "progress", "phase": "analyzing"})
-        highlights = await _run_with_heartbeat(
-            websocket, "analyzing", _call_analyzer(str(upload_path), AnalyzerOptions())
+        highlights = await _call_analyzer(
+            websocket, str(upload_path), AnalyzerOptions()
         )
 
         if len(highlights) == 0:
@@ -204,7 +205,11 @@ async def _run_with_heartbeat(
             await task
 
 
+POLL_INTERVAL = 3
+
+
 async def _call_analyzer(
+    websocket: WebSocket,
     file_path: str,
     opts: AnalyzerOptions,
 ) -> list[AnalyzerHighlight]:
@@ -214,9 +219,10 @@ async def _call_analyzer(
     }
 
     async with _get_http_client() as client:
+        # ジョブ作成
         try:
             resp = await client.post(
-                f"{ANALYZER_URL}/analyze/highlights",
+                f"{ANALYZER_URL}/analyze/highlights/jobs",
                 json=payload,
             )
         except httpx.RequestError as e:
@@ -230,13 +236,56 @@ async def _call_analyzer(
             )
             raise RuntimeError(msg)
 
-        try:
-            data = AnalyzerResponse(**resp.json())
-        except Exception as e:
-            msg = f"analyzer のレスポンス解析に失敗しました: {e}"
-            raise RuntimeError(msg) from e
+        job_data = AnalyzerJobResponse(**resp.json())
+        job_id = job_data.job_id
 
-    return data.highlights
+        # ポーリング
+        while True:
+            await asyncio.sleep(POLL_INTERVAL)
+
+            try:
+                resp = await client.get(
+                    f"{ANALYZER_URL}/analyze/highlights/jobs/{job_id}",
+                )
+            except httpx.RequestError as e:
+                msg = f"analyzer への接続に失敗しました: {e}"
+                raise RuntimeError(msg) from e
+
+            if resp.status_code != 200:  # noqa: PLR2004
+                msg = (
+                    f"analyzer がエラーを返しました "
+                    f"(status={resp.status_code}): {resp.text}"
+                )
+                raise RuntimeError(msg)
+
+            job_status = AnalyzerJobStatus(**resp.json())
+
+            # 進捗をWebSocketに送信
+            detail = None
+            if job_status.progress:
+                detail = {
+                    "stage": job_status.progress.phase,
+                    "stage_total": job_status.progress.phase_total,
+                    "frames_done": job_status.progress.frames_done,
+                    "frames_total": job_status.progress.frames_total,
+                    "started_at": job_status.started_at,
+                }
+            await websocket.send_json(
+                {
+                    "type": "progress",
+                    "phase": "analyzing",
+                    "detail": detail,
+                }
+            )
+
+            if job_status.status == "completed":
+                if job_status.result:
+                    return job_status.result.highlights
+                return []
+
+            if job_status.status == "failed":
+                msg = f"analyzer がエラーを返しました: {job_status.error}"
+                raise RuntimeError(msg)
 
 
 async def _call_clipper(

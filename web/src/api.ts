@@ -7,11 +7,20 @@ function wsUrl(): string {
 
 export type Phase = "uploading" | "analyzing" | "clipping" | "done" | "error";
 
+export interface AnalyzerDetail {
+  stage: number;
+  stage_total: number;
+  frames_done: number;
+  frames_total: number;
+  started_at: number | null;
+}
+
 export interface ProgressUpdate {
   phase: Phase;
   percent?: number;
   downloadUrl?: string;
   message?: string;
+  analyzerDetail?: AnalyzerDetail;
 }
 
 const CHUNK_SIZE = 1024 * 1024;
@@ -49,7 +58,7 @@ export function createHighlight(
     const data = JSON.parse(event.data as string);
     switch (data.type) {
       case "progress":
-        onProgress({ phase: data.phase, percent: data.percent });
+        onProgress({ phase: data.phase, percent: data.percent, analyzerDetail: data.detail });
         break;
       case "done":
         onProgress({

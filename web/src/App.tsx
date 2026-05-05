@@ -4,12 +4,12 @@ import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
 import ResultView from "./components/ResultView";
 import ErrorMessage from "./components/ErrorMessage";
-import { createHighlight, type ProgressUpdate } from "./api";
+import { createHighlight, type ProgressUpdate, type AnalyzerDetail } from "./api";
 
 type AppState =
   | { phase: "idle" }
   | { phase: "uploading"; fileName: string; percent: number }
-  | { phase: "analyzing"; fileName: string }
+  | { phase: "analyzing"; fileName: string; analyzerDetail?: AnalyzerDetail }
   | { phase: "clipping"; fileName: string }
   | { phase: "done"; downloadUrl: string }
   | { phase: "error"; message: string };
@@ -36,7 +36,7 @@ export default function App() {
           });
           break;
         case "analyzing":
-          setState({ phase: "analyzing", fileName: file.name });
+          setState({ phase: "analyzing", fileName: file.name, analyzerDetail: update.analyzerDetail });
           break;
         case "clipping":
           setState({ phase: "clipping", fileName: file.name });
@@ -80,6 +80,7 @@ export default function App() {
             phase={state.phase}
             fileName={state.fileName}
             percent={state.phase === "uploading" ? state.percent : undefined}
+            analyzerDetail={state.phase === "analyzing" ? state.analyzerDetail : undefined}
           />
         )}
         {state.phase === "done" && (
