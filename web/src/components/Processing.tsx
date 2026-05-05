@@ -1,10 +1,21 @@
+import type { AnalyzerDetail } from "../api";
+
 interface ProcessingProps {
   phase: "uploading" | "analyzing" | "clipping";
   fileName: string;
   percent?: number;
+  analyzerDetail?: AnalyzerDetail;
 }
 
-export default function Processing({ phase, fileName, percent }: ProcessingProps) {
+export default function Processing({ phase, fileName, percent, analyzerDetail }: ProcessingProps) {
+  const formatElapsed = (startedAt: number | null): string => {
+    if (!startedAt) return "";
+    const elapsed = Math.floor(Date.now() / 1000 - startedAt);
+    const min = Math.floor(elapsed / 60);
+    const sec = elapsed % 60;
+    return `${min}:${sec.toString().padStart(2, "0")}`;
+  };
+
   return (
     <div className="text-center py-12">
       {phase === "uploading" ? (
@@ -22,11 +33,25 @@ export default function Processing({ phase, fileName, percent }: ProcessingProps
       ) : (
         <>
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-6" />
-          <p className="text-lg font-medium text-gray-700">
-            {phase === "analyzing"
-              ? "Detecting highlights..."
-              : "Creating highlight clip..."}
-          </p>
+          {phase === "analyzing" && analyzerDetail ? (
+            <>
+              <p className="text-lg font-medium text-gray-700">
+                Analyzing... Stage {analyzerDetail.stage}/{analyzerDetail.stage_total}
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
+                Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
+                {analyzerDetail.started_at && (
+                  <span className="ml-2">({formatElapsed(analyzerDetail.started_at)} elapsed)</span>
+                )}
+              </p>
+            </>
+          ) : (
+            <p className="text-lg font-medium text-gray-700">
+              {phase === "analyzing"
+                ? "Detecting highlights..."
+                : "Creating highlight clip..."}
+            </p>
+          )}
         </>
       )}
       <p className="text-sm text-gray-500 mt-1">{fileName}</p>

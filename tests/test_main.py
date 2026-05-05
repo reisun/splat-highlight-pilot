@@ -10,7 +10,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.main import ANALYZER_URL, CLIPPER_URL, app
-from app.schemas import AnalyzerHighlight
+from app.schemas import AnalyzerHighlight, AnalyzerResponse
 
 
 @pytest.fixture
@@ -179,6 +179,156 @@ class TestWebSocketHighlight:
             error = ws.receive_json()
             assert error["type"] == "error"
             assert "clipper" in error["message"]
+
+
+class TestAnalyzerPolling:
+    """_call_analyzer のポーリングフローを respx で検証."""
+
+    @respx.mock
+    def test_polling_completed(self, client):
+        """ジョブ作成 → running → completed のフロー."""
+        job_id = "test-job-123"
+        result_data = AnalyzerResponse(
+            video="test.mp4",
+            model="test-model",
+            highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
+        )
+
+        # ジョブ作成
+        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": job_id})
+        )
+
+        # ポーリング: 1回目 running, 2回目 completed
+        poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{job_id}"
+        respx.get(poll_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "job_id": job_id,
+                        "status": "running",
+                        "progress": {
+                            "phase": 1,
+                            "phase_total": 2,
+                            "frames_done": 5,
+                            "frames_total": 60,
+                        },
+                        "result": None,
+                        "error": None,
+                        "started_at": 1234567890.0,
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "job_id": job_id,
+                        "status": "completed",
+                        "progress": {
+                            "phase": 2,
+                            "phase_total": 2,
+                            "frames_done": 60,
+                            "frames_total": 60,
+                        },
+                        "result": result_data.model_dump(),
+                        "error": None,
+                        "started_at": 1234567890.0,
+                    },
+                ),
+            ]
+        )
+
+        mock_clipper = AsyncMock(return_value=FAKE_MP4)
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            patch("app.main._call_clipper", mock_clipper),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
+
+            # analyzing 開始
+            analyzing = ws.receive_json()
+            assert analyzing["phase"] == "analyzing"
+
+            # 1回目ポーリング進捗
+            progress1 = ws.receive_json()
+            assert progress1["type"] == "progress"
+            assert progress1["phase"] == "analyzing"
+            assert progress1["detail"]["stage"] == 1
+            assert progress1["detail"]["frames_done"] == 5
+
+            # 2回目ポーリング進捗
+            progress2 = ws.receive_json()
+            assert progress2["type"] == "progress"
+            assert progress2["phase"] == "analyzing"
+            assert progress2["detail"]["stage"] == 2
+            assert progress2["detail"]["frames_done"] == 60
+
+            # clipping フェーズ
+            clipping = ws.receive_json()
+            assert clipping["phase"] == "clipping"
+
+            done = ws.receive_json()
+            assert done["type"] == "done"
+
+    @respx.mock
+    def test_polling_failed(self, client):
+        """ジョブが failed になった場合のフロー."""
+        job_id = "test-job-fail"
+
+        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": job_id})
+        )
+
+        poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{job_id}"
+        respx.get(poll_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": job_id,
+                    "status": "failed",
+                    "progress": None,
+                    "result": None,
+                    "error": "GPU out of memory",
+                    "started_at": 1234567890.0,
+                },
+            )
+        )
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
+
+            _analyzing = ws.receive_json()
+
+            # failed の進捗メッセージ
+            _progress = ws.receive_json()
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "GPU out of memory" in error["message"]
+
+    @respx.mock
+    def test_job_creation_error(self, client):
+        """ジョブ作成時にエラーが返った場合."""
+        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+            return_value=httpx.Response(500, text="Internal Server Error")
+        )
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
+
+            _analyzing = ws.receive_json()
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "analyzer" in error["message"]
 
 
 class TestDownload:

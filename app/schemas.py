@@ -58,6 +58,37 @@ class AnalyzerResponse(BaseModel):
     stage1_summary: dict = Field(default_factory=dict)
 
 
+# --- Analyzer ジョブ関連 ---
+
+
+class AnalyzerJobResponse(BaseModel):
+    """analyzer の /analyze/highlights/jobs POST レスポンス."""
+
+    job_id: str
+
+
+class AnalyzerJobProgress(BaseModel):
+    """analyzer のジョブ進捗."""
+
+    phase: int = 0
+    phase_total: int = 2
+    frames_done: int = 0
+    frames_total: int = 0
+
+
+class AnalyzerJobStatus(BaseModel):
+    """analyzer の /analyze/highlights/jobs/{job_id} GET レスポンス."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    status: str
+    progress: AnalyzerJobProgress | None = None
+    result: AnalyzerResponse | None = None
+    error: str | None = None
+    started_at: float | None = None
+
+
 # --- Clipper 関連 ---
 
 
