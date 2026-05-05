@@ -106,3 +106,36 @@ class ErrorResponse(BaseModel):
     """エラーレスポンス."""
 
     detail: str
+
+
+# --- オーケストレータージョブ関連 ---
+
+
+class OrchestratorHighlightInfo(BaseModel):
+    """検出されたハイライト区間の情報."""
+
+    start_seconds: float
+    end_seconds: float
+    peak_intensity: int = 0
+    description: str = ""
+
+
+class OrchestratorAnalyzerProgress(BaseModel):
+    """analyzer の進捗."""
+
+    stage: int = 0
+    stage_total: int = 2
+    frames_done: int = 0
+    frames_total: int = 0
+
+
+class OrchestratorJobStatusResponse(BaseModel):
+    """GET /jobs/{job_id} レスポンス."""
+
+    job_id: str
+    phase: str
+    analyzer_progress: OrchestratorAnalyzerProgress | None = None
+    highlights: list[OrchestratorHighlightInfo] = Field(default_factory=list)
+    download_url: str | None = None
+    error: str | None = None
+    started_at: float | None = None
