@@ -1,22 +1,51 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Header from "./components/Header";
 import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
 import ResultView from "./components/ResultView";
 import ErrorMessage from "./components/ErrorMessage";
-import { createHighlight, type ProgressUpdate, type AnalyzerDetail } from "./api";
+import { createHighlight, resumeJob, getPendingJobId, clearPendingJob, type ProgressUpdate, type AnalyzerDetail, type HighlightSegment } from "./api";
 
 type AppState =
   | { phase: "idle" }
   | { phase: "uploading"; fileName: string; percent: number }
   | { phase: "analyzing"; fileName: string; analyzerDetail?: AnalyzerDetail }
   | { phase: "clipping"; fileName: string }
-  | { phase: "done"; downloadUrl: string }
+  | { phase: "done"; downloadUrl: string; highlights?: HighlightSegment[] }
   | { phase: "error"; message: string };
 
 export default function App() {
   const [state, setState] = useState<AppState>({ phase: "idle" });
   const cancelRef = useRef<(() => void) | null>(null);
+
+  // ページ読み込み時に未完了ジョブをチェック
+  useEffect(() => {
+    const pendingJobId = getPendingJobId();
+    if (!pendingJobId) return;
+
+    setState({ phase: "analyzing", fileName: "Resuming..." });
+
+    const { cancel } = resumeJob(pendingJobId, (update: ProgressUpdate) => {
+      switch (update.phase) {
+        case "analyzing":
+          setState({ phase: "analyzing", fileName: "Resuming...", analyzerDetail: update.analyzerDetail });
+          break;
+        case "clipping":
+          setState({ phase: "clipping", fileName: "Resuming..." });
+          break;
+        case "done":
+          cancelRef.current = null;
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", highlights: update.highlights });
+          break;
+        case "error":
+          cancelRef.current = null;
+          setState({ phase: "error", message: update.message ?? "An unexpected error occurred." });
+          break;
+      }
+    });
+
+    cancelRef.current = cancel;
+  }, []);
 
   const handleFileSelected = useCallback((file: File) => {
     if (cancelRef.current) {
@@ -43,7 +72,7 @@ export default function App() {
           break;
         case "done":
           cancelRef.current = null;
-          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "" });
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", highlights: update.highlights });
           break;
         case "error":
           cancelRef.current = null;
@@ -63,6 +92,7 @@ export default function App() {
       cancelRef.current();
       cancelRef.current = null;
     }
+    clearPendingJob();
     setState({ phase: "idle" });
   }, []);
 
@@ -86,6 +116,7 @@ export default function App() {
         {state.phase === "done" && (
           <ResultView
             downloadUrl={state.downloadUrl}
+            highlights={state.highlights}
             onReset={handleReset}
           />
         )}
