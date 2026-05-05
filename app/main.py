@@ -9,11 +9,12 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.schemas import (
+    AnalyzerHighlight,
     AnalyzerOptions,
     AnalyzerResponse,
     ClipSegment,
@@ -35,21 +36,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://reisun.github.io",
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 def _get_http_client() -> httpx.AsyncClient:
-    """タイムアウト付き httpx クライアントを生成."""
     return httpx.AsyncClient(timeout=httpx.Timeout(HTTP_TIMEOUT))
 
 
@@ -58,7 +46,6 @@ async def _check_service(
     name: str,
     url: str,
 ) -> ServiceStatus:
-    """外部サービスのヘルスチェックを実行."""
     try:
         resp = await client.get(f"{url}/health")
         resp.raise_for_status()
@@ -69,7 +56,6 @@ async def _check_service(
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """自身 + 外部サービスのヘルスチェック."""
     async with _get_http_client() as client:
         analyzer_status = await _check_service(client, "analyzer", ANALYZER_URL)
         clipper_status = await _check_service(client, "clipper", CLIPPER_URL)
@@ -80,98 +66,123 @@ async def health() -> HealthResponse:
     )
 
 
-@app.post(
-    "/highlight",
-    responses={
-        200: {"content": {"video/mp4": {}}, "description": "ハイライト動画"},
-        404: {"model": ErrorResponse, "description": "ハイライト未検出"},
-        500: {"model": ErrorResponse, "description": "処理エラー"},
-        502: {"model": ErrorResponse, "description": "外部サービスエラー"},
-    },
+@app.get(
+    "/download/{job_id}",
+    responses={404: {"model": ErrorResponse}},
 )
-async def create_highlight(
-    file: UploadFile,
-    options: str | None = Form(default=None),
-) -> StreamingResponse:
-    """動画からハイライトを自動切り出し.
+async def download(job_id: str) -> FileResponse:
+    result_path = SHARED_DATA_DIR / "results" / f"{job_id}.mp4"
+    if not result_path.exists():
+        from fastapi import HTTPException
 
-    1. アップロード動画を共有ボリュームに保存
-    2. analyzer でハイライト区間を検出
-    3. clipper でハイライト区間をクリッピング
-    4. 結果の mp4 を返却
-    """
-    # オプション解析
-    analyzer_opts = AnalyzerOptions()
-    if options:
-        try:
-            analyzer_opts = AnalyzerOptions(**json.loads(options))
-        except (json.JSONDecodeError, ValueError) as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"options の JSON が不正です: {e}",
-            ) from e
+        raise HTTPException(status_code=404, detail="File not found")
 
-    # アップロードファイルを共有ボリュームに保存
-    upload_dir = SHARED_DATA_DIR / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    return FileResponse(
+        path=str(result_path),
+        media_type="video/mp4",
+        filename="highlight.mp4",
+        headers={"Content-Disposition": 'attachment; filename="highlight.mp4"'},
+        background=BackgroundTask(_cleanup_file, result_path),
+    )
 
-    filename = file.filename or "video.mp4"
-    unique_name = f"{uuid.uuid4()}_{filename}"
-    saved_path = upload_dir / unique_name
+
+@app.websocket("/ws/highlight")
+async def ws_highlight(websocket: WebSocket) -> None:
+    await websocket.accept()
+    upload_path: Path | None = None
 
     try:
-        content = await file.read()
-        saved_path.write_bytes(content)
+        start_raw = await websocket.receive_text()
+        start_msg = json.loads(start_raw)
 
-        # analyzer にハイライト検出を依頼
-        highlights = await _call_analyzer(str(saved_path), analyzer_opts)
+        if start_msg.get("type") != "start":
+            await websocket.send_json(
+                {"type": "error", "message": "Expected start message"}
+            )
+            await websocket.close()
+            return
+
+        filename = start_msg.get("filename", "video.mp4")
+        total_size = start_msg.get("size", 0)
+
+        job_id = str(uuid.uuid4())
+        upload_dir = SHARED_DATA_DIR / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / f"{job_id}_{filename}"
+
+        received = 0
+        with open(upload_path, "wb") as f:
+            while True:
+                msg = await websocket.receive()
+
+                if "text" in msg and msg["text"] is not None:
+                    text_data = json.loads(msg["text"])
+                    if text_data.get("type") == "upload_complete":
+                        break
+                    await websocket.send_json(
+                        {"type": "error", "message": "Unexpected message"}
+                    )
+                    await websocket.close()
+                    return
+
+                if "bytes" in msg and msg["bytes"] is not None:
+                    chunk = msg["bytes"]
+                    f.write(chunk)
+                    received += len(chunk)
+                    percent = int(received / total_size * 100) if total_size else 0
+                    await websocket.send_json(
+                        {"type": "progress", "phase": "uploading", "percent": percent}
+                    )
+
+        await websocket.send_json({"type": "progress", "phase": "analyzing"})
+        highlights = await _call_analyzer(str(upload_path), AnalyzerOptions())
 
         if len(highlights) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="No highlights detected",
+            await websocket.send_json(
+                {"type": "error", "message": "No highlights detected"}
             )
+            await websocket.close()
+            return
 
-        # segments を構築
         segments = [
-            ClipSegment(
-                start=str(h.start_seconds),
-                end=str(h.end_seconds),
-            )
+            ClipSegment(start=str(h.start_seconds), end=str(h.end_seconds))
             for h in highlights
         ]
 
-        # clipper にクリッピングを依頼
-        video_bytes = await _call_clipper(str(saved_path), segments)
+        await websocket.send_json({"type": "progress", "phase": "clipping"})
+        video_bytes = await _call_clipper(str(upload_path), segments)
 
-        return StreamingResponse(
-            content=iter([video_bytes]),
-            media_type="video/mp4",
-            headers={
-                "Content-Disposition": 'attachment; filename="highlight.mp4"',
-            },
+        results_dir = SHARED_DATA_DIR / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        result_path = results_dir / f"{job_id}.mp4"
+        result_path.write_bytes(video_bytes)
+
+        await websocket.send_json(
+            {"type": "done", "download_url": f"/download/{job_id}"}
         )
+        await websocket.close()
 
-    except HTTPException:
-        _cleanup_file(saved_path)
-        raise
-    except Exception as e:
-        _cleanup_file(saved_path)
-        logger.exception("ハイライト処理中に予期しないエラーが発生")
-        raise HTTPException(
-            status_code=500,
-            detail=f"内部エラー: {e}",
-        ) from e
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # noqa: BLE001
+        logger.exception("WebSocket処理中にエラーが発生")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.close()
+        except Exception:  # noqa: BLE001, S110
+            pass
+    finally:
+        if upload_path:
+            _cleanup_file(upload_path)
 
 
 async def _call_analyzer(
     file_path: str,
     opts: AnalyzerOptions,
-) -> list:
-    """analyzer の /analyze/highlights を呼び出し."""
+) -> list[AnalyzerHighlight]:
     payload = {
         "file_path": file_path,
-        **opts.model_dump(),
+        **opts.model_dump(exclude_none=True),
     }
 
     async with _get_http_client() as client:
@@ -181,27 +192,21 @@ async def _call_analyzer(
                 json=payload,
             )
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"analyzer への接続に失敗しました: {e}",
-            ) from e
+            msg = f"analyzer への接続に失敗しました: {e}"
+            raise RuntimeError(msg) from e
 
         if resp.status_code != 200:  # noqa: PLR2004
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"analyzer がエラーを返しました "
-                    f"(status={resp.status_code}): {resp.text}"
-                ),
+            msg = (
+                f"analyzer がエラーを返しました "
+                f"(status={resp.status_code}): {resp.text}"
             )
+            raise RuntimeError(msg)
 
         try:
             data = AnalyzerResponse(**resp.json())
         except Exception as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"analyzer のレスポンス解析に失敗しました: {e}",
-            ) from e
+            msg = f"analyzer のレスポンス解析に失敗しました: {e}"
+            raise RuntimeError(msg) from e
 
     return data.highlights
 
@@ -210,7 +215,6 @@ async def _call_clipper(
     file_path: str,
     segments: list[ClipSegment],
 ) -> bytes:
-    """clipper の /clip を呼び出し（file_path モード）."""
     payload = {
         "file_path": file_path,
         "segments": [s.model_dump() for s in segments],
@@ -224,25 +228,19 @@ async def _call_clipper(
                 json=payload,
             )
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"clipper への接続に失敗しました: {e}",
-            ) from e
+            msg = f"clipper への接続に失敗しました: {e}"
+            raise RuntimeError(msg) from e
 
         if resp.status_code != 200:  # noqa: PLR2004
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"clipper がエラーを返しました "
-                    f"(status={resp.status_code}): {resp.text}"
-                ),
+            msg = (
+                f"clipper がエラーを返しました (status={resp.status_code}): {resp.text}"
             )
+            raise RuntimeError(msg)
 
     return resp.content
 
 
 def _cleanup_file(path: Path) -> None:
-    """一時ファイルを削除."""
     try:
         path.unlink(missing_ok=True)
     except OSError:

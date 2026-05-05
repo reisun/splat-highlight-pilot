@@ -1,55 +1,79 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
-const TIMEOUT_MS = 5 * 60 * 1000;
-
-export interface HighlightResult {
-  videoUrl: string;
+function wsUrl(): string {
+  const base = API_BASE_URL || window.location.origin;
+  return base.replace(/^http/, "ws");
 }
 
-export interface ApiError {
-  status: number;
-  message: string;
+export type Phase = "uploading" | "analyzing" | "clipping" | "done" | "error";
+
+export interface ProgressUpdate {
+  phase: Phase;
+  percent?: number;
+  downloadUrl?: string;
+  message?: string;
 }
 
-export async function createHighlight(
+const CHUNK_SIZE = 1024 * 1024;
+
+export function createHighlight(
   file: File,
-): Promise<HighlightResult> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  onProgress: (update: ProgressUpdate) => void,
+): { cancel: () => void } {
+  const ws = new WebSocket(`${wsUrl()}/ws/highlight`);
 
-  try {
-    const formData = new FormData();
-    formData.append("file", file);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: "start",
+      filename: file.name,
+      size: file.size,
+    }));
 
-    const response = await fetch(`${API_BASE_URL}/highlight`, {
-      method: "POST",
-      body: formData,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      let message: string;
-      switch (response.status) {
-        case 404:
-          message = "No highlights were detected in this video.";
-          break;
-        case 502:
-          message = "External service error. Please try again later.";
-          break;
-        default: {
-          const body = await response.text().catch(() => "");
-          message = body || `Server error (${response.status})`;
-          break;
-        }
+    let offset = 0;
+    const sendNext = () => {
+      if (offset >= file.size) {
+        ws.send(JSON.stringify({ type: "upload_complete" }));
+        return;
       }
-      const error: ApiError = { status: response.status, message };
-      throw error;
-    }
+      const chunk = file.slice(offset, offset + CHUNK_SIZE);
+      chunk.arrayBuffer().then((buf) => {
+        ws.send(buf);
+        offset += buf.byteLength;
+        setTimeout(sendNext, 0);
+      });
+    };
+    sendNext();
+  };
 
-    const blob = await response.blob();
-    const videoUrl = URL.createObjectURL(blob);
-    return { videoUrl };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data as string);
+    switch (data.type) {
+      case "progress":
+        onProgress({ phase: data.phase, percent: data.percent });
+        break;
+      case "done":
+        onProgress({
+          phase: "done",
+          downloadUrl: `${API_BASE_URL}${data.download_url}`,
+        });
+        ws.close();
+        break;
+      case "error":
+        onProgress({ phase: "error", message: data.message });
+        ws.close();
+        break;
+    }
+  };
+
+  ws.onerror = () => {
+    onProgress({ phase: "error", message: "WebSocket connection failed." });
+  };
+
+  ws.onclose = (event) => {
+    if (!event.wasClean) {
+      onProgress({ phase: "error", message: "Connection lost." });
+    }
+  };
+
+  return { cancel: () => ws.close() };
 }

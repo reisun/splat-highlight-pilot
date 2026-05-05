@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import io
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -11,21 +10,35 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.main import ANALYZER_URL, CLIPPER_URL, app
+from app.schemas import AnalyzerHighlight
 
 
 @pytest.fixture
-def client(tmp_path):
-    """テスト用 FastAPI クライアント（共有ディレクトリを tmp_path に差し替え）."""
-    with patch("app.main.SHARED_DATA_DIR", tmp_path), TestClient(app) as c:
+def shared_dir(tmp_path):
+    return tmp_path
+
+
+@pytest.fixture
+def client(shared_dir):
+    with patch("app.main.SHARED_DATA_DIR", shared_dir), TestClient(app) as c:
         yield c
 
 
-class TestHealth:
-    """GET /health のテスト."""
+SAMPLE_HIGHLIGHTS = [
+    AnalyzerHighlight(
+        start_seconds=10.0, end_seconds=20.0, peak_intensity=8, description="kill"
+    ),
+    AnalyzerHighlight(
+        start_seconds=45.0, end_seconds=55.0, peak_intensity=9, description="ult"
+    ),
+]
 
+FAKE_MP4 = b"\x00\x00\x00\x1cftypisom"
+
+
+class TestHealth:
     @respx.mock
     def test_all_connected(self, client):
-        """analyzer, clipper 両方接続時."""
         respx.get(f"{ANALYZER_URL}/health").mock(
             return_value=httpx.Response(200, json={"status": "ok"})
         )
@@ -42,7 +55,6 @@ class TestHealth:
 
     @respx.mock
     def test_services_down(self, client):
-        """外部サービスが停止している場合でも自身は 200 を返す."""
         respx.get(f"{ANALYZER_URL}/health").mock(
             side_effect=httpx.ConnectError("Connection refused")
         )
@@ -57,113 +69,130 @@ class TestHealth:
         assert all(s["status"] == "disconnected" for s in data["services"])
 
 
-class TestHighlight:
-    """POST /highlight のテスト."""
+def _send_upload(ws, video_data=b"fake-video-data"):
+    ws.send_json({"type": "start", "filename": "test.mp4", "size": len(video_data)})
+    ws.send_bytes(video_data)
+    upload_progress = ws.receive_json()
+    ws.send_json({"type": "upload_complete"})
+    return upload_progress
 
-    def _make_file(self, content: bytes = b"fake-video-data") -> dict:
-        """テスト用アップロードファイルを作成."""
-        return {"file": ("test.mp4", io.BytesIO(content), "video/mp4")}
 
-    @respx.mock
+class TestWebSocketHighlight:
     def test_success(self, client):
-        """正常パイプライン: analyzer → clipper → mp4 返却."""
-        analyzer_response = {
-            "video": "test.mp4",
-            "model": "gemini-2.5-flash",
-            "highlights": [
-                {
-                    "start_seconds": 10.0,
-                    "end_seconds": 20.0,
-                    "peak_intensity": 8,
-                    "description": "キル",
-                },
-                {
-                    "start_seconds": 45.0,
-                    "end_seconds": 55.0,
-                    "peak_intensity": 9,
-                    "description": "ウルト",
-                },
-            ],
-            "stage1_summary": {},
-        }
-        respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
-            return_value=httpx.Response(200, json=analyzer_response)
-        )
+        mock_analyzer = AsyncMock(return_value=list(SAMPLE_HIGHLIGHTS))
+        mock_clipper = AsyncMock(return_value=FAKE_MP4)
 
-        fake_mp4 = b"\x00\x00\x00\x1cftypisom"  # 偽 mp4 ヘッダ
-        respx.post(f"{CLIPPER_URL}/clip").mock(
-            return_value=httpx.Response(
-                200,
-                content=fake_mp4,
-                headers={"content-type": "video/mp4"},
-            )
-        )
+        with (
+            patch("app.main._call_analyzer", mock_analyzer),
+            patch("app.main._call_clipper", mock_clipper),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            upload_progress = _send_upload(ws)
+            assert upload_progress["type"] == "progress"
+            assert upload_progress["phase"] == "uploading"
 
-        resp = client.post("/highlight", files=self._make_file())
+            analyzing = ws.receive_json()
+            assert analyzing["type"] == "progress"
+            assert analyzing["phase"] == "analyzing"
+
+            clipping = ws.receive_json()
+            assert clipping["type"] == "progress"
+            assert clipping["phase"] == "clipping"
+
+            done = ws.receive_json()
+            assert done["type"] == "done"
+            assert "download_url" in done
+            assert done["download_url"].startswith("/download/")
+
+        job_id = done["download_url"].split("/download/")[1]
+        resp = client.get(f"/download/{job_id}")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "video/mp4"
-        assert len(resp.content) > 0
+        assert resp.content == FAKE_MP4
 
-    @respx.mock
     def test_no_highlights(self, client):
-        """ハイライト 0 件時は 404."""
-        analyzer_response = {"video": "test.mp4", "highlights": []}
-        respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
-            return_value=httpx.Response(200, json=analyzer_response)
-        )
+        mock_analyzer = AsyncMock(return_value=[])
 
-        resp = client.post("/highlight", files=self._make_file())
-        assert resp.status_code == 404
-        assert "No highlights detected" in resp.json()["detail"]
+        with (
+            patch("app.main._call_analyzer", mock_analyzer),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
 
-    @respx.mock
+            analyzing = ws.receive_json()
+            assert analyzing["phase"] == "analyzing"
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "No highlights detected" in error["message"]
+
     def test_analyzer_error(self, client):
-        """analyzer がエラーを返した場合は 502."""
-        respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
-            return_value=httpx.Response(500, text="Internal Server Error")
+        mock_analyzer = AsyncMock(
+            side_effect=RuntimeError("analyzer がエラーを返しました (status=500)")
         )
 
-        resp = client.post("/highlight", files=self._make_file())
-        assert resp.status_code == 502
-        assert "analyzer" in resp.json()["detail"]
+        with (
+            patch("app.main._call_analyzer", mock_analyzer),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
 
-    @respx.mock
+            _analyzing = ws.receive_json()
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "analyzer" in error["message"]
+
     def test_analyzer_connection_error(self, client):
-        """analyzer に接続できない場合は 502."""
-        respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
-            side_effect=httpx.ConnectError("Connection refused")
+        mock_analyzer = AsyncMock(
+            side_effect=RuntimeError("analyzer への接続に失敗しました")
         )
 
-        resp = client.post("/highlight", files=self._make_file())
-        assert resp.status_code == 502
+        with (
+            patch("app.main._call_analyzer", mock_analyzer),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
 
-    @respx.mock
+            _analyzing = ws.receive_json()
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "analyzer" in error["message"]
+
     def test_clipper_error(self, client):
-        """clipper がエラーを返した場合は 502."""
-        analyzer_response = {
-            "video": "test.mp4",
-            "model": "gemini-2.5-flash",
-            "highlights": [
-                {"start_seconds": 10.0, "end_seconds": 20.0},
-            ],
-            "stage1_summary": {},
-        }
-        respx.post(f"{ANALYZER_URL}/analyze/highlights").mock(
-            return_value=httpx.Response(200, json=analyzer_response)
-        )
-        respx.post(f"{CLIPPER_URL}/clip").mock(
-            return_value=httpx.Response(500, text="FFmpeg error")
+        mock_analyzer = AsyncMock(return_value=list(SAMPLE_HIGHLIGHTS))
+        mock_clipper = AsyncMock(
+            side_effect=RuntimeError("clipper がエラーを返しました (status=500)")
         )
 
-        resp = client.post("/highlight", files=self._make_file())
-        assert resp.status_code == 502
-        assert "clipper" in resp.json()["detail"]
+        with (
+            patch("app.main._call_analyzer", mock_analyzer),
+            patch("app.main._call_clipper", mock_clipper),
+            client.websocket_connect("/ws/highlight") as ws,
+        ):
+            _send_upload(ws)
 
-    def test_invalid_options(self, client):
-        """不正な options JSON は 400."""
-        resp = client.post(
-            "/highlight",
-            files=self._make_file(),
-            data={"options": "not-valid-json"},
-        )
-        assert resp.status_code == 400
+            _analyzing = ws.receive_json()
+            _clipping = ws.receive_json()
+
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert "clipper" in error["message"]
+
+
+class TestDownload:
+    def test_success(self, client, shared_dir):
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+        result_file = results_dir / "test-job-id.mp4"
+        result_file.write_bytes(FAKE_MP4)
+
+        resp = client.get("/download/test-job-id")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "video/mp4"
+        assert resp.content == FAKE_MP4
+
+    def test_not_found(self, client):
+        resp = client.get("/download/nonexistent-id")
+        assert resp.status_code == 404
