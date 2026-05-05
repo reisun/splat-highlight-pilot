@@ -75,7 +75,6 @@ export function resumeJob(
         } else if (data.phase === "clipping") {
           onProgress({ phase: "clipping" });
         } else if (data.phase === "completed") {
-          clearPendingJob();
           onProgress({
             phase: "done",
             downloadUrl: `${API_BASE_URL}${data.download_url}`,
@@ -83,14 +82,12 @@ export function resumeJob(
           });
           return;
         } else if (data.phase === "failed") {
-          clearPendingJob();
           onProgress({ phase: "error", message: data.error || "Processing failed" });
           return;
         }
 
         await new Promise((r) => setTimeout(r, 3000));
       } catch {
-        clearPendingJob();
         onProgress({ phase: "error", message: "Failed to check job status" });
         return;
       }
@@ -142,7 +139,6 @@ export function createHighlight(
         localStorage.setItem(STORAGE_KEY, data.job_id);
         break;
       case "done":
-        clearPendingJob();
         onProgress({
           phase: "done",
           downloadUrl: `${API_BASE_URL}${data.download_url}`,
@@ -151,7 +147,6 @@ export function createHighlight(
         ws.close();
         break;
       case "error":
-        clearPendingJob();
         onProgress({ phase: "error", message: data.message });
         ws.close();
         break;
