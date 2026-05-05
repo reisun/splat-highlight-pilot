@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -135,7 +137,9 @@ async def ws_highlight(websocket: WebSocket) -> None:
                     )
 
         await websocket.send_json({"type": "progress", "phase": "analyzing"})
-        highlights = await _call_analyzer(str(upload_path), AnalyzerOptions())
+        highlights = await _run_with_heartbeat(
+            websocket, "analyzing", _call_analyzer(str(upload_path), AnalyzerOptions())
+        )
 
         if len(highlights) == 0:
             await websocket.send_json(
@@ -150,7 +154,9 @@ async def ws_highlight(websocket: WebSocket) -> None:
         ]
 
         await websocket.send_json({"type": "progress", "phase": "clipping"})
-        video_bytes = await _call_clipper(str(upload_path), segments)
+        video_bytes = await _run_with_heartbeat(
+            websocket, "clipping", _call_clipper(str(upload_path), segments)
+        )
 
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +180,28 @@ async def ws_highlight(websocket: WebSocket) -> None:
     finally:
         if upload_path:
             _cleanup_file(upload_path)
+
+
+HEARTBEAT_INTERVAL = 10
+
+
+async def _run_with_heartbeat(
+    websocket: WebSocket,
+    phase: str,
+    coro,  # noqa: ANN001
+):
+    async def _heartbeat():
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            await websocket.send_json({"type": "progress", "phase": phase})
+
+    task = asyncio.create_task(_heartbeat())
+    try:
+        return await coro
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 async def _call_analyzer(
