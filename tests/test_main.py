@@ -238,11 +238,11 @@ class TestAnalyzerPolling:
             ]
         )
 
-        mock_clipper = AsyncMock(return_value=FAKE_MP4)
+        mock_clipper = AsyncMock(return_value=None)
 
         with (
             patch("app.main.POLL_INTERVAL", 0),
-            patch("app.main._call_clipper", mock_clipper),
+            patch("app.main._call_clipper_background", mock_clipper),
             client.websocket_connect("/ws/highlight") as ws,
         ):
             _send_upload(ws)

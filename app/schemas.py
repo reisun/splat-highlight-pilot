@@ -113,6 +113,24 @@ class ClipSegment(BaseModel):
     end: str
 
 
+class ClipperJobResponse(BaseModel):
+    """clipper の /clip/jobs POST レスポンス."""
+
+    job_id: str
+
+
+class ClipperJobStatus(BaseModel):
+    """clipper の /clip/jobs/{job_id} GET レスポンス."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    status: str
+    result_path: str | None = None
+    error: str | None = None
+    started_at: float | None = None
+
+
 # --- エラー ---
 
 

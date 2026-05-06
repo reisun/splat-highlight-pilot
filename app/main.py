@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,8 @@ from app.schemas import (
     AnalyzerJobResponse,
     AnalyzerJobStatus,
     AnalyzerOptions,
+    ClipperJobResponse,
+    ClipperJobStatus,
     ClipSegment,
     ErrorResponse,
     HealthResponse,
@@ -367,12 +370,14 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         ]
 
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-        video_bytes = await _call_clipper(str(upload_path), segments)
-
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
-        result_path = results_dir / f"{job_id}.mp4"
-        result_path.write_bytes(video_bytes)
+        await _call_clipper_background(
+            str(upload_path),
+            segments,
+            str(results_dir),
+            job_id,
+        )
 
         orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
     except Exception as e:  # noqa: BLE001
@@ -452,20 +457,24 @@ async def _call_analyzer_background(
                 raise RuntimeError(msg)
 
 
-async def _call_clipper(
+async def _call_clipper_background(
     file_path: str,
     segments: list[ClipSegment],
-) -> bytes:
+    output_dir: str,
+    job_id: str,
+) -> None:
+    """clipper の非同期ジョブAPIを呼び出し、完了までポーリング."""
     payload = {
         "file_path": file_path,
         "segments": [s.model_dump() for s in segments],
+        "output_dir": output_dir,
         "output_format": "mp4",
     }
 
     async with _get_http_client() as client:
         try:
             resp = await client.post(
-                f"{CLIPPER_URL}/clip",
+                f"{CLIPPER_URL}/clip/jobs",
                 json=payload,
             )
         except httpx.RequestError as e:
@@ -478,7 +487,39 @@ async def _call_clipper(
             )
             raise RuntimeError(msg)
 
-    return resp.content
+        clipper_job = ClipperJobResponse(**resp.json())
+        clipper_job_id = clipper_job.job_id
+
+        while True:
+            await asyncio.sleep(POLL_INTERVAL)
+
+            try:
+                resp = await client.get(
+                    f"{CLIPPER_URL}/clip/jobs/{clipper_job_id}",
+                )
+            except httpx.RequestError as e:
+                msg = f"clipper への接続に失敗しました: {e}"
+                raise RuntimeError(msg) from e
+
+            if resp.status_code != 200:  # noqa: PLR2004
+                msg = (
+                    f"clipper がエラーを返しました "
+                    f"(status={resp.status_code}): {resp.text}"
+                )
+                raise RuntimeError(msg)
+
+            status = ClipperJobStatus(**resp.json())
+
+            if status.status == "completed":
+                result_path = Path(status.result_path or "")
+                final = Path(output_dir) / f"{job_id}.mp4"
+                if result_path.exists() and result_path != final:
+                    shutil.move(str(result_path), str(final))
+                return
+
+            if status.status == "failed":
+                msg = f"clipper がエラーを返しました: {status.error}"
+                raise RuntimeError(msg)
 
 
 def _cleanup_file(path: Path) -> None:
