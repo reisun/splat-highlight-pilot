@@ -4,21 +4,20 @@ import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
 import ResultView from "./components/ResultView";
 import ErrorMessage from "./components/ErrorMessage";
-import { createHighlight, resumeJob, getPendingJobId, clearPendingJob, type ProgressUpdate, type AnalyzerDetail, type HighlightSegment } from "./api";
+import { createHighlight, resumeJob, getPendingJobId, clearPendingJob, type ProgressUpdate, type AnalyzerDetail } from "./api";
 
 type AppState =
   | { phase: "idle" }
   | { phase: "uploading"; fileName: string; percent: number }
   | { phase: "analyzing"; fileName: string; analyzerDetail?: AnalyzerDetail }
   | { phase: "clipping"; fileName: string }
-  | { phase: "done"; downloadUrl: string; highlights?: HighlightSegment[] }
+  | { phase: "done"; downloadUrl: string; analysisUrl?: string }
   | { phase: "error"; message: string };
 
 export default function App() {
   const [state, setState] = useState<AppState>({ phase: "idle" });
   const cancelRef = useRef<(() => void) | null>(null);
 
-  // ページ読み込み時に未完了ジョブをチェック
   useEffect(() => {
     const pendingJobId = getPendingJobId();
     if (!pendingJobId) return;
@@ -35,7 +34,7 @@ export default function App() {
           break;
         case "done":
           cancelRef.current = null;
-          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", highlights: update.highlights });
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl });
           break;
         case "error":
           cancelRef.current = null;
@@ -72,7 +71,7 @@ export default function App() {
           break;
         case "done":
           cancelRef.current = null;
-          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", highlights: update.highlights });
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl });
           break;
         case "error":
           cancelRef.current = null;
@@ -116,7 +115,7 @@ export default function App() {
         {state.phase === "done" && (
           <ResultView
             downloadUrl={state.downloadUrl}
-            highlights={state.highlights}
+            analysisUrl={state.analysisUrl}
             onReset={handleReset}
           />
         )}
