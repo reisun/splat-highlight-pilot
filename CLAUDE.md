@@ -52,6 +52,7 @@ docker compose build
 - `app/` - アプリケーションソースコード
   - `main.py` - FastAPI アプリとエンドポイント
   - `schemas.py` - Pydantic リクエスト/レスポンスモデル
+  - `job_store.py` - インメモリジョブストア（ジョブ状態管理、クリーンアップ）
 - `tests/` - テストスイート
 - `web/` - React + Vite フロントエンド
 - `docs/` - 設計書
