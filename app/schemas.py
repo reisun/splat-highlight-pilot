@@ -51,6 +51,8 @@ class AnalyzerFrameResult(BaseModel):
     enemy_team_color: str = ""
     my_team_count: int | None = None
     enemy_team_count: int | None = None
+    my_team_count_raw: int | None = None
+    enemy_team_count_raw: int | None = None
 
 
 class AnalyzerHighlight(BaseModel):
@@ -160,6 +162,8 @@ class OrchestratorFrameInfo(BaseModel):
     enemy_team_color: str = ""
     my_team_count: int | None = None
     enemy_team_count: int | None = None
+    my_team_count_raw: int | None = None
+    enemy_team_count_raw: int | None = None
 
 
 class OrchestratorHighlightInfo(BaseModel):
