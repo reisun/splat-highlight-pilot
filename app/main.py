@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
 
 from app.job_store import FrameInfo, HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
@@ -37,14 +38,39 @@ CLIPPER_URL = os.environ.get("CLIPPER_URL", "http://clipper:8000")
 SHARED_DATA_DIR = Path(os.environ.get("SHARED_DATA_DIR", "/shared-data"))
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "300"))
 POLL_INTERVAL = 3
+CLEANUP_INTERVAL = float(os.environ.get("CLEANUP_INTERVAL", "3600"))
+CLEANUP_MAX_AGE = float(os.environ.get("CLEANUP_MAX_AGE", "3600"))
+
+orchestrator_jobs = OrchestratorJobStore()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):  # noqa: ANN201
+    """アプリ起動時に定期クリーンアップタスクを開始する."""
+    task = asyncio.create_task(_periodic_cleanup())
+    yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
 
 app = FastAPI(
     title="Splat Highlight Pilot",
     description="スプラトゥーン試合動画ハイライト自動切り出しオーケストレーター",
-    version="0.2.0",
+    version="0.3.0",
+    lifespan=lifespan,
 )
 
-orchestrator_jobs = OrchestratorJobStore()
+
+async def _periodic_cleanup() -> None:
+    """定期的に古いジョブとファイルを削除する."""
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL)
+        try:
+            results_dir = SHARED_DATA_DIR / "results"
+            orchestrator_jobs.cleanup_old(results_dir, CLEANUP_MAX_AGE)
+        except Exception:  # noqa: BLE001
+            logger.exception("クリーンアップ中にエラー")
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -90,7 +116,6 @@ async def download(job_id: str) -> FileResponse:
         media_type="video/mp4",
         filename="highlight.mp4",
         headers={"Content-Disposition": 'attachment; filename="highlight.mp4"'},
-        background=BackgroundTask(_cleanup_file, result_path),
     )
 
 

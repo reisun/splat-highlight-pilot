@@ -325,6 +325,19 @@ class TestDownload:
         assert resp.headers["content-type"] == "video/mp4"
         assert resp.content == FAKE_MP4
 
+    def test_file_persists_after_download(self, client, shared_dir):
+        """ダウンロード後もファイルが残る（複数回DL可能）."""
+        results_dir = shared_dir / "results"
+        results_dir.mkdir(exist_ok=True)
+        result_file = results_dir / "persist-test.mp4"
+        result_file.write_bytes(FAKE_MP4)
+
+        client.get("/download/persist-test")
+        assert result_file.exists()
+
+        resp2 = client.get("/download/persist-test")
+        assert resp2.status_code == 200
+
     def test_not_found(self, client):
         resp = client.get("/download/nonexistent-id")
         assert resp.status_code == 404
@@ -344,3 +357,46 @@ class TestDownloadAnalysis:
     def test_not_found(self, client):
         resp = client.get("/download/nonexistent-id/analysis")
         assert resp.status_code == 404
+
+
+class TestCleanup:
+    """自動クリーンアップのテスト."""
+
+    def test_cleanup_removes_old_jobs_and_files(self, shared_dir):
+        """期限切れジョブとファイルが削除される."""
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+
+        job = orchestrator_jobs.create()
+        orchestrator_jobs.mark_completed(job.job_id, f"/download/{job.job_id}")
+        job_obj = orchestrator_jobs.get(job.job_id)
+        job_obj.completed_at = time.time() - 7200
+
+        mp4_file = results_dir / f"{job.job_id}.mp4"
+        analysis_file = results_dir / f"{job.job_id}_analysis.json"
+        mp4_file.write_bytes(FAKE_MP4)
+        analysis_file.write_text("[]", encoding="utf-8")
+
+        removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
+
+        assert removed == 1
+        assert orchestrator_jobs.get(job.job_id) is None
+        assert not mp4_file.exists()
+        assert not analysis_file.exists()
+
+    def test_cleanup_keeps_recent_jobs(self, shared_dir):
+        """期限内のジョブは削除されない."""
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+
+        job = orchestrator_jobs.create()
+        orchestrator_jobs.mark_completed(job.job_id, f"/download/{job.job_id}")
+
+        mp4_file = results_dir / f"{job.job_id}.mp4"
+        mp4_file.write_bytes(FAKE_MP4)
+
+        removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
+
+        assert removed == 0
+        assert orchestrator_jobs.get(job.job_id) is not None
+        assert mp4_file.exists()
