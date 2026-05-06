@@ -31,11 +31,24 @@ class AnalyzerOptions(BaseModel):
     start: float | None = None
     end: float | None = None
     stage1_interval: int = 30
-    stage2_interval: int = 5
-    threshold: int = 5
-    max_highlights: int | None = None
+    stage2_interval: int = 3
+    threshold: int = 100
+    max_highlights: int = 3
     model: str | None = None
     concurrency: int = 1
+
+
+class AnalyzerFrameResult(BaseModel):
+    """analyzer レスポンス内のフレーム解析結果."""
+
+    timestamp_seconds: float
+    kills_in_log: int = 0
+    assists_in_log: int = 0
+    team_score_increasing: bool = False
+    my_special_active: bool = False
+    is_dead: bool = False
+    score: int = 0
+    description: str = ""
 
 
 class AnalyzerHighlight(BaseModel):
@@ -45,6 +58,7 @@ class AnalyzerHighlight(BaseModel):
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
+    frames: list[AnalyzerFrameResult] = Field(default_factory=list)
 
 
 class AnalyzerResponse(BaseModel):
@@ -111,6 +125,19 @@ class ErrorResponse(BaseModel):
 # --- オーケストレータージョブ関連 ---
 
 
+class OrchestratorFrameInfo(BaseModel):
+    """フレーム解析結果."""
+
+    timestamp_seconds: float
+    kills_in_log: int = 0
+    assists_in_log: int = 0
+    team_score_increasing: bool = False
+    my_special_active: bool = False
+    is_dead: bool = False
+    score: int = 0
+    description: str = ""
+
+
 class OrchestratorHighlightInfo(BaseModel):
     """検出されたハイライト区間の情報."""
 
@@ -118,6 +145,7 @@ class OrchestratorHighlightInfo(BaseModel):
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
+    frames: list[OrchestratorFrameInfo] = Field(default_factory=list)
 
 
 class OrchestratorAnalyzerProgress(BaseModel):

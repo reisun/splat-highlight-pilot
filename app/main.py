@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from app.job_store import HighlightInfo, JobPhase, OrchestratorJobStore
+from app.job_store import FrameInfo, HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
     AnalyzerHighlight,
     AnalyzerJobResponse,
@@ -23,6 +23,7 @@ from app.schemas import (
     ErrorResponse,
     HealthResponse,
     OrchestratorAnalyzerProgress,
+    OrchestratorFrameInfo,
     OrchestratorHighlightInfo,
     OrchestratorJobStatusResponse,
     ServiceStatus,
@@ -118,6 +119,19 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
                 end_seconds=h.end_seconds,
                 peak_intensity=h.peak_intensity,
                 description=h.description,
+                frames=[
+                    OrchestratorFrameInfo(
+                        timestamp_seconds=f.timestamp_seconds,
+                        kills_in_log=f.kills_in_log,
+                        assists_in_log=f.assists_in_log,
+                        team_score_increasing=f.team_score_increasing,
+                        my_special_active=f.my_special_active,
+                        is_dead=f.is_dead,
+                        score=f.score,
+                        description=f.description,
+                    )
+                    for f in h.frames
+                ],
             )
             for h in job.highlights
         ],
@@ -257,6 +271,19 @@ async def _forward_job_progress(websocket: WebSocket, job_id: str) -> None:
                         "end_seconds": h.end_seconds,
                         "peak_intensity": h.peak_intensity,
                         "description": h.description,
+                        "frames": [
+                            {
+                                "timestamp_seconds": f.timestamp_seconds,
+                                "kills_in_log": f.kills_in_log,
+                                "assists_in_log": f.assists_in_log,
+                                "team_score_increasing": f.team_score_increasing,
+                                "my_special_active": f.my_special_active,
+                                "is_dead": f.is_dead,
+                                "score": f.score,
+                                "description": f.description,
+                            }
+                            for f in h.frames
+                        ],
                     }
                     for h in job.highlights
                 ]
@@ -303,6 +330,19 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 end_seconds=h.end_seconds,
                 peak_intensity=h.peak_intensity,
                 description=h.description,
+                frames=[
+                    FrameInfo(
+                        timestamp_seconds=f.timestamp_seconds,
+                        kills_in_log=f.kills_in_log,
+                        assists_in_log=f.assists_in_log,
+                        team_score_increasing=f.team_score_increasing,
+                        my_special_active=f.my_special_active,
+                        is_dead=f.is_dead,
+                        score=f.score,
+                        description=f.description,
+                    )
+                    for f in h.frames
+                ],
             )
             for h in highlights
         ]
