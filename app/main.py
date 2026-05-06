@@ -15,12 +15,12 @@ import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from app.job_store import FrameInfo, HighlightInfo, JobPhase, OrchestratorJobStore
+from app.job_store import HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
-    AnalyzerHighlight,
     AnalyzerJobResponse,
     AnalyzerJobStatus,
     AnalyzerOptions,
+    AnalyzerResponse,
     ClipperJobResponse,
     ClipperJobStatus,
     ClipSegment,
@@ -250,38 +250,34 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
     """バックグラウンドでanalyze->clipパイプラインを実行."""
     try:
         orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-        highlights = await _call_analyzer_background(job_id, str(upload_path), opts)
+        analyzer_result = await _call_analyzer_background(
+            job_id, str(upload_path), opts
+        )
 
-        if not highlights:
+        if not analyzer_result or not analyzer_result.highlights:
             orchestrator_jobs.mark_failed(job_id, "No highlights detected")
             return
+
+        highlights = analyzer_result.highlights
+        all_frames = analyzer_result.frames
 
         # 解析結果をJSONファイルとして保存
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         analysis_path = results_dir / f"{job_id}_analysis.json"
-        analysis_data = [
-            {
-                "start_seconds": h.start_seconds,
-                "end_seconds": h.end_seconds,
-                "peak_intensity": h.peak_intensity,
-                "description": h.description,
-                "frames": [
-                    {
-                        "timestamp_seconds": f.timestamp_seconds,
-                        "kills_in_log": f.kills_in_log,
-                        "assists_in_log": f.assists_in_log,
-                        "team_score_increasing": f.team_score_increasing,
-                        "my_special_active": f.my_special_active,
-                        "is_dead": f.is_dead,
-                        "score": f.score,
-                        "description": f.description,
-                    }
-                    for f in h.frames
-                ],
-            }
-            for h in highlights
-        ]
+        analysis_data = {
+            "highlights": [
+                {
+                    "start_seconds": h.start_seconds,
+                    "end_seconds": h.end_seconds,
+                    "peak_intensity": h.peak_intensity,
+                    "description": h.description,
+                }
+                for h in highlights
+            ],
+            "frames": [f.model_dump() for f in all_frames],
+            "scan_summary": analyzer_result.scan_summary,
+        }
         analysis_path.write_text(
             json.dumps(analysis_data, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -294,19 +290,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 end_seconds=h.end_seconds,
                 peak_intensity=h.peak_intensity,
                 description=h.description,
-                frames=[
-                    FrameInfo(
-                        timestamp_seconds=f.timestamp_seconds,
-                        kills_in_log=f.kills_in_log,
-                        assists_in_log=f.assists_in_log,
-                        team_score_increasing=f.team_score_increasing,
-                        my_special_active=f.my_special_active,
-                        is_dead=f.is_dead,
-                        score=f.score,
-                        description=f.description,
-                    )
-                    for f in h.frames
-                ],
             )
             for h in highlights
         ]
@@ -350,7 +333,7 @@ async def _call_analyzer_background(
     job_id: str,
     file_path: str,
     opts: AnalyzerOptions,
-) -> list[AnalyzerHighlight]:
+) -> AnalyzerResponse | None:
     """バックグラウンド用: ジョブストアに進捗を書き込む版."""
     payload = {
         "file_path": file_path,
@@ -407,9 +390,7 @@ async def _call_analyzer_background(
                 )
 
             if job_status.status == "completed":
-                if job_status.result:
-                    return job_status.result.highlights
-                return []
+                return job_status.result
 
             if job_status.status == "failed":
                 msg = f"analyzer がエラーを返しました: {job_status.error}"

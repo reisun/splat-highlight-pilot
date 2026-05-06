@@ -32,13 +32,17 @@ class AnalyzerProgress:
 @dataclass
 class FrameInfo:
     timestamp_seconds: float
-    kills_in_log: int = 0
-    assists_in_log: int = 0
-    team_score_increasing: bool = False
-    my_special_active: bool = False
-    is_dead: bool = False
     score: int = 0
+    kills: int = 1
+    assists: int = 1
+    score_gain: int = 1
+    special: int = 1
+    is_dead: bool = False
     description: str = ""
+    my_team_color: str = ""
+    enemy_team_color: str = ""
+    my_team_score: int | None = None
+    enemy_team_score: int | None = None
 
 
 @dataclass
@@ -47,7 +51,6 @@ class HighlightInfo:
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
-    frames: list[FrameInfo] = field(default_factory=list)
 
 
 @dataclass

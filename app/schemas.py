@@ -40,13 +40,17 @@ class AnalyzerFrameResult(BaseModel):
     """analyzer レスポンス内のフレーム解析結果."""
 
     timestamp_seconds: float
-    kills_in_log: int = 0
-    assists_in_log: int = 0
-    team_score_increasing: bool = False
-    my_special_active: bool = False
-    is_dead: bool = False
     score: int = 0
+    kills: int = 1
+    assists: int = 1
+    score_gain: int = 1
+    special: int = 1
+    is_dead: bool = False
     description: str = ""
+    my_team_color: str = ""
+    enemy_team_color: str = ""
+    my_team_score: int | None = None
+    enemy_team_score: int | None = None
 
 
 class AnalyzerHighlight(BaseModel):
@@ -56,7 +60,6 @@ class AnalyzerHighlight(BaseModel):
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
-    frames: list[AnalyzerFrameResult] = Field(default_factory=list)
 
 
 class AnalyzerResponse(BaseModel):
@@ -67,6 +70,7 @@ class AnalyzerResponse(BaseModel):
     video: str = ""
     model: str = ""
     highlights: list[AnalyzerHighlight] = Field(default_factory=list)
+    frames: list[AnalyzerFrameResult] = Field(default_factory=list)
     scan_summary: dict = Field(default_factory=dict)
 
 
@@ -145,13 +149,17 @@ class OrchestratorFrameInfo(BaseModel):
     """フレーム解析結果."""
 
     timestamp_seconds: float
-    kills_in_log: int = 0
-    assists_in_log: int = 0
-    team_score_increasing: bool = False
-    my_special_active: bool = False
-    is_dead: bool = False
     score: int = 0
+    kills: int = 1
+    assists: int = 1
+    score_gain: int = 1
+    special: int = 1
+    is_dead: bool = False
     description: str = ""
+    my_team_color: str = ""
+    enemy_team_color: str = ""
+    my_team_score: int | None = None
+    enemy_team_score: int | None = None
 
 
 class OrchestratorHighlightInfo(BaseModel):
@@ -161,7 +169,6 @@ class OrchestratorHighlightInfo(BaseModel):
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
-    frames: list[OrchestratorFrameInfo] = Field(default_factory=list)
 
 
 class OrchestratorAnalyzerProgress(BaseModel):
