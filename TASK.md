@@ -37,3 +37,16 @@
 ### 9. クリップ動画の自動クリーンアップ ✅
 
 - PR: https://github.com/reisun/splat-highlight-pilot/pull/7
+
+### 10. 全フレーム分析データの返却 ✅
+
+- PR: https://github.com/reisun/splatoon-battle-analyzer/pull/18
+- PR: https://github.com/reisun/splat-highlight-pilot/pull/8
+
+### 11. ハイライト区間選出アルゴリズムの検証・修正 ✅
+
+- PR: https://github.com/reisun/splatoon-battle-analyzer/pull/17
+
+### 12. analyzer 内の clutch 要素の削除 ✅
+
+- PR: https://github.com/reisun/splatoon-battle-analyzer/pull/14
