@@ -29,11 +29,24 @@ class AnalyzerProgress:
 
 
 @dataclass
+class FrameInfo:
+    timestamp_seconds: float
+    kills_in_log: int = 0
+    assists_in_log: int = 0
+    team_score_increasing: bool = False
+    my_special_active: bool = False
+    is_dead: bool = False
+    score: int = 0
+    description: str = ""
+
+
+@dataclass
 class HighlightInfo:
     start_seconds: float
     end_seconds: float
     peak_intensity: int = 0
     description: str = ""
+    frames: list[FrameInfo] = field(default_factory=list)
 
 
 @dataclass
