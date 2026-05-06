@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,14 @@ class OrchestratorJobStore:
                 job.error = error
                 job.completed_at = time.time()
 
-    def cleanup_old(self, max_age_seconds: float = 3600) -> None:
+    def cleanup_old(
+        self,
+        results_dir: Path,
+        max_age_seconds: float = 3600,
+    ) -> int:
+        """期限切れジョブとその関連ファイルを削除する."""
         now = time.time()
+        removed = 0
         with self._lock:
             to_remove = [
                 jid
@@ -141,4 +148,16 @@ class OrchestratorJobStore:
                 if j.completed_at and (now - j.completed_at) > max_age_seconds
             ]
             for jid in to_remove:
+                for path in [
+                    results_dir / f"{jid}.mp4",
+                    results_dir / f"{jid}_analysis.json",
+                ]:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("ファイル削除失敗: %s", path)
                 del self._jobs[jid]
+                removed += 1
+        if removed:
+            logger.info("クリーンアップ完了: %d件のジョブを削除", removed)
+        return removed
