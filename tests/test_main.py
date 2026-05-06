@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import time
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -54,15 +54,6 @@ def _send_upload(ws, video_data=b"fake-video-data"):
     return upload_progress
 
 
-def _receive_until_type(ws, msg_type, max_messages=50):
-    """指定タイプのメッセージが来るまで受信する."""
-    for _ in range(max_messages):
-        msg = ws.receive_json()
-        if msg["type"] == msg_type:
-            return msg
-    raise AssertionError(f"Did not receive message type '{msg_type}'")
-
-
 class TestHealth:
     @respx.mock
     def test_all_connected(self, client):
@@ -96,89 +87,33 @@ class TestHealth:
         assert all(s["status"] == "disconnected" for s in data["services"])
 
 
-class TestWebSocketHighlight:
-    def test_success(self, client, shared_dir):
-        """アップロード -> ジョブ作成 -> 完了のフロー."""
+class TestWebSocketUpload:
+    """WebSocket はアップロード専用。job_id を返して close する."""
+
+    def test_upload_returns_job_id(self, client):
+        """アップロード完了後に job_id を返す."""
 
         async def mock_pipeline(job_id, upload_path, opts):
-            orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-            await asyncio.sleep(0)
-            orchestrator_jobs.set_highlights(
-                job_id,
-                [
-                    HighlightInfo(
-                        start_seconds=10.0,
-                        end_seconds=20.0,
-                        peak_intensity=8,
-                        description="kill",
-                    ),
-                ],
-            )
-            orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
+            pass
 
         with (
             patch("app.main._run_pipeline", mock_pipeline),
-            patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
+            client.websocket_connect("/ws/upload") as ws,
         ):
             upload_progress = _send_upload(ws)
             assert upload_progress["type"] == "progress"
             assert upload_progress["phase"] == "uploading"
 
-            # job_created
             job_msg = ws.receive_json()
             assert job_msg["type"] == "job_created"
             assert "job_id" in job_msg
 
-            # done (skip intermediate progress messages)
-            done = _receive_until_type(ws, "done")
-            assert "download_url" in done
-            assert "highlights" in done
-            assert len(done["highlights"]) >= 1
-            assert done["highlights"][0]["start_seconds"] == 10.0
-
-    def test_no_highlights(self, client):
-        """ハイライトが検出されなかった場合."""
-
-        async def mock_pipeline(job_id, upload_path, opts):
-            orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-            await asyncio.sleep(0)
-            orchestrator_jobs.mark_failed(job_id, "No highlights detected")
-
-        with (
-            patch("app.main._run_pipeline", mock_pipeline),
-            patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
-        ):
-            _send_upload(ws)
-
-            # job_created
-            job_msg = ws.receive_json()
-            assert job_msg["type"] == "job_created"
-
-            # error
-            error = _receive_until_type(ws, "error")
-            assert "No highlights detected" in error["message"]
-
-    def test_pipeline_error(self, client):
-        """パイプライン中にエラーが発生した場合."""
-
-        async def mock_pipeline(job_id, upload_path, opts):
-            orchestrator_jobs.mark_failed(
-                job_id, "analyzer がエラーを返しました (status=500)"
-            )
-
-        with (
-            patch("app.main._run_pipeline", mock_pipeline),
-            patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
-        ):
-            _send_upload(ws)
-
-            _job_msg = ws.receive_json()
-
-            error = _receive_until_type(ws, "error")
-            assert "analyzer" in error["message"]
+    def test_invalid_start_message(self, client):
+        """start 以外のメッセージでエラーになる."""
+        with client.websocket_connect("/ws/upload") as ws:
+            ws.send_json({"type": "invalid"})
+            error_msg = ws.receive_json()
+            assert error_msg["type"] == "error"
 
 
 class TestAnalyzerPolling:
@@ -194,12 +129,10 @@ class TestAnalyzerPolling:
             highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
         )
 
-        # ジョブ作成
         respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
             return_value=httpx.Response(200, json={"job_id": analyzer_job_id})
         )
 
-        # ポーリング: 1回目 running, 2回目 completed
         poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{analyzer_job_id}"
         respx.get(poll_url).mock(
             side_effect=[
@@ -210,7 +143,7 @@ class TestAnalyzerPolling:
                         "status": "running",
                         "progress": {
                             "phase": 1,
-                            "phase_total": 2,
+                            "phase_total": 1,
                             "frames_done": 5,
                             "frames_total": 60,
                         },
@@ -225,8 +158,8 @@ class TestAnalyzerPolling:
                         "job_id": analyzer_job_id,
                         "status": "completed",
                         "progress": {
-                            "phase": 2,
-                            "phase_total": 2,
+                            "phase": 1,
+                            "phase_total": 1,
                             "frames_done": 60,
                             "frames_total": 60,
                         },
@@ -243,20 +176,22 @@ class TestAnalyzerPolling:
         with (
             patch("app.main.POLL_INTERVAL", 0),
             patch("app.main._call_clipper_background", mock_clipper),
-            client.websocket_connect("/ws/highlight") as ws,
+            client.websocket_connect("/ws/upload") as ws,
         ):
             _send_upload(ws)
-
-            # job_created
             job_msg = ws.receive_json()
             assert job_msg["type"] == "job_created"
+            job_id = job_msg["job_id"]
 
-            # done (skip intermediate progress messages)
-            done = _receive_until_type(ws, "done")
-            assert done["type"] == "done"
-            assert "download_url" in done
-            assert "highlights" in done
-            assert len(done["highlights"]) == 2
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] == "completed":
+                break
+            time.sleep(0.05)
+
+        assert data["phase"] == "completed"
+        assert data["download_url"] is not None
 
     @respx.mock
     def test_polling_failed(self, client):
@@ -284,14 +219,21 @@ class TestAnalyzerPolling:
 
         with (
             patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
+            client.websocket_connect("/ws/upload") as ws,
         ):
             _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
 
-            _job_msg = ws.receive_json()
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] == "failed":
+                break
+            time.sleep(0.05)
 
-            error = _receive_until_type(ws, "error")
-            assert "GPU out of memory" in error["message"]
+        assert data["phase"] == "failed"
+        assert "GPU out of memory" in data["error"]
 
     @respx.mock
     def test_job_creation_error(self, client):
@@ -302,14 +244,21 @@ class TestAnalyzerPolling:
 
         with (
             patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
+            client.websocket_connect("/ws/upload") as ws,
         ):
             _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
 
-            _job_msg = ws.receive_json()
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] == "failed":
+                break
+            time.sleep(0.05)
 
-            error = _receive_until_type(ws, "error")
-            assert "analyzer" in error["message"]
+        assert data["phase"] == "failed"
+        assert "analyzer" in data["error"]
 
 
 class TestGetJobStatus:
@@ -322,7 +271,7 @@ class TestGetJobStatus:
         orchestrator_jobs.update_analyzer_progress(
             job.job_id,
             stage=1,
-            stage_total=2,
+            stage_total=1,
             frames_done=10,
             frames_total=100,
         )
@@ -335,8 +284,8 @@ class TestGetJobStatus:
         assert data["analyzer_progress"]["stage"] == 1
         assert data["analyzer_progress"]["frames_done"] == 10
 
-    def test_get_completed_job_with_highlights(self, client):
-        """完了ジョブのハイライト情報を取得できる."""
+    def test_get_completed_job(self, client):
+        """完了ジョブの情報を取得できる."""
         job = orchestrator_jobs.create()
         orchestrator_jobs.set_highlights(
             job.job_id,
@@ -356,81 +305,12 @@ class TestGetJobStatus:
         data = resp.json()
         assert data["phase"] == "completed"
         assert data["download_url"] == "/download/test"
-        assert len(data["highlights"]) == 1
-        assert data["highlights"][0]["start_seconds"] == 10.0
-        assert data["highlights"][0]["peak_intensity"] == 8
+        assert data["analysis_url"] == f"/download/{job.job_id}/analysis"
 
     def test_job_not_found(self, client):
         """存在しないジョブIDで404."""
         resp = client.get("/jobs/nonexistent-id")
         assert resp.status_code == 404
-
-
-class TestJobRecovery:
-    """WebSocket復帰フローのテスト."""
-
-    def test_resume_completed_job(self, client):
-        """完了済みジョブに復帰できる."""
-        job = orchestrator_jobs.create()
-        orchestrator_jobs.set_highlights(
-            job.job_id,
-            [
-                HighlightInfo(
-                    start_seconds=10.0,
-                    end_seconds=20.0,
-                    peak_intensity=8,
-                    description="kill",
-                ),
-            ],
-        )
-        orchestrator_jobs.mark_completed(job.job_id, f"/download/{job.job_id}")
-
-        with (
-            patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
-        ):
-            ws.send_json(
-                {
-                    "type": "start",
-                    "filename": "test.mp4",
-                    "size": 100,
-                    "job_id": job.job_id,
-                }
-            )
-
-            # 完了ジョブなので progress(completed) + done が来る
-            done = _receive_until_type(ws, "done")
-            assert done["download_url"] == f"/download/{job.job_id}"
-            assert len(done["highlights"]) == 1
-
-    def test_resume_nonexistent_job_falls_through(self, client):
-        """存在しないジョブIDで復帰しようとすると通常フローに入る."""
-
-        async def mock_pipeline(job_id, upload_path, opts):
-            orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
-
-        with (
-            patch("app.main._run_pipeline", mock_pipeline),
-            patch("app.main.POLL_INTERVAL", 0),
-            client.websocket_connect("/ws/highlight") as ws,
-        ):
-            ws.send_json(
-                {
-                    "type": "start",
-                    "filename": "test.mp4",
-                    "size": len(b"fake"),
-                    "job_id": "nonexistent-id",
-                }
-            )
-            ws.send_bytes(b"fake")
-            _upload_progress = ws.receive_json()
-            ws.send_json({"type": "upload_complete"})
-
-            job_msg = ws.receive_json()
-            assert job_msg["type"] == "job_created"
-
-            done = _receive_until_type(ws, "done")
-            assert done["type"] == "done"
 
 
 class TestDownload:
@@ -447,4 +327,20 @@ class TestDownload:
 
     def test_not_found(self, client):
         resp = client.get("/download/nonexistent-id")
+        assert resp.status_code == 404
+
+
+class TestDownloadAnalysis:
+    def test_success(self, client, shared_dir):
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+        analysis_file = results_dir / "test-job-id_analysis.json"
+        analysis_file.write_text("[]", encoding="utf-8")
+
+        resp = client.get("/download/test-job-id/analysis")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/json"
+
+    def test_not_found(self, client):
+        resp = client.get("/download/nonexistent-id/analysis")
         assert resp.status_code == 404

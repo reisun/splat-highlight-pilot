@@ -95,15 +95,17 @@ export function createHighlight(
   file: File,
   onProgress: (update: ProgressUpdate) => void,
 ): { cancel: () => void } {
-  const ws = new WebSocket(`${wsUrl()}/ws/highlight`);
-  let jobCreated = false;
+  const ws = new WebSocket(`${wsUrl()}/ws/upload`);
+  let pollCancel: (() => void) | null = null;
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: "start",
-      filename: file.name,
-      size: file.size,
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "start",
+        filename: file.name,
+        size: file.size,
+      }),
+    );
 
     let offset = 0;
     const sendNext = () => {
@@ -125,20 +127,16 @@ export function createHighlight(
     const data = JSON.parse(event.data as string);
     switch (data.type) {
       case "progress":
-        onProgress({ phase: data.phase, percent: data.percent, analyzerDetail: data.detail });
+        onProgress({ phase: data.phase, percent: data.percent });
         break;
-      case "job_created":
-        jobCreated = true;
-        localStorage.setItem(STORAGE_KEY, data.job_id);
+      case "job_created": {
+        const jobId = data.job_id as string;
+        localStorage.setItem(STORAGE_KEY, jobId);
+        onProgress({ phase: "analyzing", jobId });
+        const { cancel } = resumeJob(jobId, onProgress);
+        pollCancel = cancel;
         break;
-      case "done":
-        onProgress({
-          phase: "done",
-          downloadUrl: `${API_BASE_URL}${data.download_url}`,
-          analysisUrl: data.analysis_url ? `${API_BASE_URL}${data.analysis_url}` : undefined,
-        });
-        ws.close();
-        break;
+      }
       case "error":
         onProgress({ phase: "error", message: data.message });
         ws.close();
@@ -147,16 +145,21 @@ export function createHighlight(
   };
 
   ws.onerror = () => {
-    if (!jobCreated) {
+    if (!pollCancel) {
       onProgress({ phase: "error", message: "WebSocket connection failed." });
     }
   };
 
   ws.onclose = (event) => {
-    if (!event.wasClean && !jobCreated) {
+    if (!event.wasClean && !pollCancel) {
       onProgress({ phase: "error", message: "Connection lost." });
     }
   };
 
-  return { cancel: () => ws.close() };
+  return {
+    cancel: () => {
+      ws.close();
+      pollCancel?.();
+    },
+  };
 }

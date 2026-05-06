@@ -41,7 +41,7 @@ POLL_INTERVAL = 3
 app = FastAPI(
     title="Splat Highlight Pilot",
     description="スプラトゥーン試合動画ハイライト自動切り出しオーケストレーター",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 orchestrator_jobs = OrchestratorJobStore()
@@ -114,7 +114,7 @@ async def download_analysis(job_id: str) -> FileResponse:
 
 @app.get("/jobs/{job_id}", response_model=OrchestratorJobStatusResponse)
 async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
-    """ジョブの状態を返す（復帰用）."""
+    """ジョブの状態を返す."""
     job = orchestrator_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -128,7 +128,9 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
             frames_total=job.analyzer_progress.frames_total,
         )
 
-    analysis_url = f"/download/{job.job_id}/analysis" if job.phase == JobPhase.COMPLETED else None
+    analysis_url = (
+        f"/download/{job.job_id}/analysis" if job.phase == JobPhase.COMPLETED else None
+    )
 
     return OrchestratorJobStatusResponse(
         job_id=job.job_id,
@@ -141,8 +143,9 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
     )
 
 
-@app.websocket("/ws/highlight")
-async def ws_highlight(websocket: WebSocket) -> None:
+@app.websocket("/ws/upload")
+async def ws_upload(websocket: WebSocket) -> None:
+    """動画アップロード専用WebSocket。アップロード完了後にjob_idを返してclose."""
     await websocket.accept()
     upload_path: Path | None = None
 
@@ -160,15 +163,6 @@ async def ws_highlight(websocket: WebSocket) -> None:
         filename = start_msg.get("filename", "video.mp4")
         total_size = start_msg.get("size", 0)
 
-        # 復帰チェック: job_id が指定されていたらポーリングモード
-        resume_job_id = start_msg.get("job_id")
-        if resume_job_id:
-            existing_job = orchestrator_jobs.get(resume_job_id)
-            if existing_job:
-                await _forward_job_progress(websocket, resume_job_id)
-                return
-
-        # ジョブ作成
         job = orchestrator_jobs.create()
         job_id = job.job_id
 
@@ -204,23 +198,16 @@ async def ws_highlight(websocket: WebSocket) -> None:
                         }
                     )
 
-        # アップロード完了、ジョブIDをクライアントに送信
-        await websocket.send_json({"type": "job_created", "job_id": job_id})
-
-        # バックグラウンドでパイプライン開始
         orchestrator_jobs.set_upload_path(job_id, str(upload_path))
         asyncio.create_task(  # noqa: RUF006
             _run_pipeline(job_id, upload_path, AnalyzerOptions())
         )
 
-        # ジョブストアをポーリングして進捗転送
-        await _forward_job_progress(websocket, job_id)
-
-        # upload_path は _run_pipeline が cleanup するので None にする
+        await websocket.send_json({"type": "job_created", "job_id": job_id})
+        await websocket.close()
         upload_path = None
 
     except WebSocketDisconnect:
-        # クライアント切断時、バックグラウンドタスクは継続
         upload_path = None
     except Exception as e:  # noqa: BLE001
         logger.exception("WebSocket処理中にエラーが発生")
@@ -232,63 +219,6 @@ async def ws_highlight(websocket: WebSocket) -> None:
     finally:
         if upload_path:
             _cleanup_file(upload_path)
-
-
-async def _forward_job_progress(websocket: WebSocket, job_id: str) -> None:
-    """ジョブストアの進捗をWebSocketに転送する。切断されたら return."""
-    try:
-        while True:
-            await asyncio.sleep(POLL_INTERVAL)
-
-            job = orchestrator_jobs.get(job_id)
-            if not job:
-                await websocket.send_json({"type": "error", "message": "Job not found"})
-                await websocket.close()
-                return
-
-            detail = None
-            if job.phase == JobPhase.ANALYZING:
-                detail = {
-                    "stage": job.analyzer_progress.stage,
-                    "stage_total": job.analyzer_progress.stage_total,
-                    "frames_done": job.analyzer_progress.frames_done,
-                    "frames_total": job.analyzer_progress.frames_total,
-                    "started_at": job.started_at,
-                }
-
-            await websocket.send_json(
-                {
-                    "type": "progress",
-                    "phase": job.phase.value,
-                    "detail": detail,
-                }
-            )
-
-            if job.phase == JobPhase.COMPLETED:
-                await websocket.send_json(
-                    {
-                        "type": "done",
-                        "job_id": job_id,
-                        "download_url": job.download_url,
-                        "analysis_url": f"/download/{job_id}/analysis",
-                    }
-                )
-                await websocket.close()
-                return
-
-            if job.phase == JobPhase.FAILED:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": job.error or "Unknown error",
-                    }
-                )
-                await websocket.close()
-                return
-
-    except WebSocketDisconnect:
-        # クライアントが切断しても、バックグラウンドタスクは継続
-        pass
 
 
 async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -> None:
@@ -376,8 +306,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         ]
 
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-        results_dir = SHARED_DATA_DIR / "results"
-        results_dir.mkdir(parents=True, exist_ok=True)
         await _call_clipper_background(
             str(upload_path),
             segments,
