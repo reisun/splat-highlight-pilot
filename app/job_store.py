@@ -41,8 +41,8 @@ class FrameInfo:
     description: str = ""
     my_team_color: str = ""
     enemy_team_color: str = ""
-    my_team_score: int | None = None
-    enemy_team_score: int | None = None
+    my_team_count: int | None = None
+    enemy_team_count: int | None = None
 
 
 @dataclass
