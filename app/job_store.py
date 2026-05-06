@@ -23,7 +23,7 @@ class JobPhase(StrEnum):
 @dataclass
 class AnalyzerProgress:
     stage: int = 0
-    stage_total: int = 2
+    stage_total: int = 1
     frames_done: int = 0
     frames_total: int = 0
 

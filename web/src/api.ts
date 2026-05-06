@@ -15,33 +15,14 @@ export interface AnalyzerDetail {
   started_at: number | null;
 }
 
-export interface FrameAnalysis {
-  timestamp_seconds: number;
-  kills_in_log: number;
-  assists_in_log: number;
-  team_score_increasing: boolean;
-  my_special_active: boolean;
-  is_dead: boolean;
-  score: number;
-  description: string;
-}
-
-export interface HighlightSegment {
-  start_seconds: number;
-  end_seconds: number;
-  peak_intensity: number;
-  description: string;
-  frames?: FrameAnalysis[];
-}
-
 export interface ProgressUpdate {
   phase: Phase;
   percent?: number;
   downloadUrl?: string;
+  analysisUrl?: string;
   message?: string;
   analyzerDetail?: AnalyzerDetail;
   jobId?: string;
-  highlights?: HighlightSegment[];
 }
 
 const CHUNK_SIZE = 1024 * 1024;
@@ -90,7 +71,7 @@ export function resumeJob(
           onProgress({
             phase: "done",
             downloadUrl: `${API_BASE_URL}${data.download_url}`,
-            highlights: data.highlights,
+            analysisUrl: data.analysis_url ? `${API_BASE_URL}${data.analysis_url}` : undefined,
           });
           return;
         } else if (data.phase === "failed") {
@@ -154,7 +135,7 @@ export function createHighlight(
         onProgress({
           phase: "done",
           downloadUrl: `${API_BASE_URL}${data.download_url}`,
-          highlights: data.highlights,
+          analysisUrl: data.analysis_url ? `${API_BASE_URL}${data.analysis_url}` : undefined,
         });
         ws.close();
         break;

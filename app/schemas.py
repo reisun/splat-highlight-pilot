@@ -30,12 +30,10 @@ class AnalyzerOptions(BaseModel):
 
     start: float | None = None
     end: float | None = None
-    stage1_interval: int = 30
-    stage2_interval: int = 3
+    interval: float = 5.0
     threshold: int = 100
-    max_highlights: int = 3
     model: str | None = None
-    concurrency: int = 1
+    concurrency: int = 4
 
 
 class AnalyzerFrameResult(BaseModel):
@@ -69,7 +67,7 @@ class AnalyzerResponse(BaseModel):
     video: str = ""
     model: str = ""
     highlights: list[AnalyzerHighlight] = Field(default_factory=list)
-    stage1_summary: dict = Field(default_factory=dict)
+    scan_summary: dict = Field(default_factory=dict)
 
 
 # --- Analyzer ジョブ関連 ---
@@ -85,7 +83,7 @@ class AnalyzerJobProgress(BaseModel):
     """analyzer のジョブ進捗."""
 
     phase: int = 0
-    phase_total: int = 2
+    phase_total: int = 1
     frames_done: int = 0
     frames_total: int = 0
 
@@ -170,7 +168,7 @@ class OrchestratorAnalyzerProgress(BaseModel):
     """analyzer の進捗."""
 
     stage: int = 0
-    stage_total: int = 2
+    stage_total: int = 1
     frames_done: int = 0
     frames_total: int = 0
 
@@ -181,7 +179,7 @@ class OrchestratorJobStatusResponse(BaseModel):
     job_id: str
     phase: str
     analyzer_progress: OrchestratorAnalyzerProgress | None = None
-    highlights: list[OrchestratorHighlightInfo] = Field(default_factory=list)
     download_url: str | None = None
+    analysis_url: str | None = None
     error: str | None = None
     started_at: float | None = None

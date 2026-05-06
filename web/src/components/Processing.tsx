@@ -36,7 +36,7 @@ export default function Processing({ phase, fileName, percent, analyzerDetail }:
           {phase === "analyzing" && analyzerDetail ? (
             <>
               <p className="text-lg font-medium text-gray-700">
-                Analyzing... Stage {analyzerDetail.stage}/{analyzerDetail.stage_total}
+                Analyzing...
               </p>
               <p className="text-sm text-gray-500 mt-1">
                 Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}

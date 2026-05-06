@@ -26,8 +26,6 @@ from app.schemas import (
     ErrorResponse,
     HealthResponse,
     OrchestratorAnalyzerProgress,
-    OrchestratorFrameInfo,
-    OrchestratorHighlightInfo,
     OrchestratorJobStatusResponse,
     ServiceStatus,
 )
@@ -96,6 +94,24 @@ async def download(job_id: str) -> FileResponse:
     )
 
 
+@app.get(
+    "/download/{job_id}/analysis",
+    responses={404: {"model": ErrorResponse}},
+)
+async def download_analysis(job_id: str) -> FileResponse:
+    """解析結果のJSONファイルをダウンロードする."""
+    result_path = SHARED_DATA_DIR / "results" / f"{job_id}_analysis.json"
+    if not result_path.exists():
+        raise HTTPException(status_code=404, detail="Analysis file not found")
+
+    return FileResponse(
+        path=str(result_path),
+        media_type="application/json",
+        filename="analysis.json",
+        headers={"Content-Disposition": 'attachment; filename="analysis.json"'},
+    )
+
+
 @app.get("/jobs/{job_id}", response_model=OrchestratorJobStatusResponse)
 async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
     """ジョブの状態を返す（復帰用）."""
@@ -112,33 +128,14 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
             frames_total=job.analyzer_progress.frames_total,
         )
 
+    analysis_url = f"/download/{job.job_id}/analysis" if job.phase == JobPhase.COMPLETED else None
+
     return OrchestratorJobStatusResponse(
         job_id=job.job_id,
         phase=job.phase.value,
         analyzer_progress=progress,
-        highlights=[
-            OrchestratorHighlightInfo(
-                start_seconds=h.start_seconds,
-                end_seconds=h.end_seconds,
-                peak_intensity=h.peak_intensity,
-                description=h.description,
-                frames=[
-                    OrchestratorFrameInfo(
-                        timestamp_seconds=f.timestamp_seconds,
-                        kills_in_log=f.kills_in_log,
-                        assists_in_log=f.assists_in_log,
-                        team_score_increasing=f.team_score_increasing,
-                        my_special_active=f.my_special_active,
-                        is_dead=f.is_dead,
-                        score=f.score,
-                        description=f.description,
-                    )
-                    for f in h.frames
-                ],
-            )
-            for h in job.highlights
-        ],
         download_url=job.download_url,
+        analysis_url=analysis_url,
         error=job.error,
         started_at=job.started_at,
     )
@@ -268,34 +265,12 @@ async def _forward_job_progress(websocket: WebSocket, job_id: str) -> None:
             )
 
             if job.phase == JobPhase.COMPLETED:
-                highlights_data = [
-                    {
-                        "start_seconds": h.start_seconds,
-                        "end_seconds": h.end_seconds,
-                        "peak_intensity": h.peak_intensity,
-                        "description": h.description,
-                        "frames": [
-                            {
-                                "timestamp_seconds": f.timestamp_seconds,
-                                "kills_in_log": f.kills_in_log,
-                                "assists_in_log": f.assists_in_log,
-                                "team_score_increasing": f.team_score_increasing,
-                                "my_special_active": f.my_special_active,
-                                "is_dead": f.is_dead,
-                                "score": f.score,
-                                "description": f.description,
-                            }
-                            for f in h.frames
-                        ],
-                    }
-                    for h in job.highlights
-                ]
                 await websocket.send_json(
                     {
                         "type": "done",
                         "job_id": job_id,
                         "download_url": job.download_url,
-                        "highlights": highlights_data,
+                        "analysis_url": f"/download/{job_id}/analysis",
                     }
                 )
                 await websocket.close()
@@ -325,6 +300,37 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         if not highlights:
             orchestrator_jobs.mark_failed(job_id, "No highlights detected")
             return
+
+        # 解析結果をJSONファイルとして保存
+        results_dir = SHARED_DATA_DIR / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        analysis_path = results_dir / f"{job_id}_analysis.json"
+        analysis_data = [
+            {
+                "start_seconds": h.start_seconds,
+                "end_seconds": h.end_seconds,
+                "peak_intensity": h.peak_intensity,
+                "description": h.description,
+                "frames": [
+                    {
+                        "timestamp_seconds": f.timestamp_seconds,
+                        "kills_in_log": f.kills_in_log,
+                        "assists_in_log": f.assists_in_log,
+                        "team_score_increasing": f.team_score_increasing,
+                        "my_special_active": f.my_special_active,
+                        "is_dead": f.is_dead,
+                        "score": f.score,
+                        "description": f.description,
+                    }
+                    for f in h.frames
+                ],
+            }
+            for h in highlights
+        ]
+        analysis_path.write_text(
+            json.dumps(analysis_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         # ハイライト情報を保存してログに出力
         highlight_infos = [
