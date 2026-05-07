@@ -280,9 +280,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         highlights = analyzer_result.highlights
         all_frames = analyzer_result.frames
 
-        _flatten_clipped_scores(all_frames, highlights)
-
-        # 解析結果をJSONファイルとして保存
+        # 解析結果をJSONファイルとして保存（元のスコアを保持）
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         analysis_path = results_dir / f"{job_id}_analysis.json"
@@ -299,6 +297,8 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             "frames": [f.model_dump() for f in all_frames],
             "scan_summary": analyzer_result.scan_summary,
         }
+
+        _flatten_clipped_scores(all_frames, highlights)
         analysis_path.write_text(
             json.dumps(analysis_data, ensure_ascii=False, indent=2),
             encoding="utf-8",
