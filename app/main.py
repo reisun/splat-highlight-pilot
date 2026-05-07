@@ -17,6 +17,8 @@ from fastapi.responses import FileResponse
 
 from app.job_store import HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
+    AnalyzerFrameResult,
+    AnalyzerHighlight,
     AnalyzerJobResponse,
     AnalyzerJobStatus,
     AnalyzerOptions,
@@ -246,6 +248,23 @@ async def ws_upload(websocket: WebSocket) -> None:
             _cleanup_file(upload_path)
 
 
+def _flatten_clipped_scores(
+    frames: list[AnalyzerFrameResult],
+    highlights: list[AnalyzerHighlight],
+) -> None:
+    """クリップ済み区間のスコアを全域平均値に置き換える."""
+    if not frames:
+        return
+    avg_score = sum(f.score for f in frames) // len(frames)
+    avg_score_gain = sum(f.score_gain for f in frames) // len(frames)
+    for frame in frames:
+        for h in highlights:
+            if h.start_seconds <= frame.timestamp_seconds <= h.end_seconds:
+                frame.score = avg_score
+                frame.score_gain = avg_score_gain
+                break
+
+
 async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -> None:
     """バックグラウンドでanalyze->clipパイプラインを実行."""
     try:
@@ -260,6 +279,8 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
 
         highlights = analyzer_result.highlights
         all_frames = analyzer_result.frames
+
+        _flatten_clipped_scores(all_frames, highlights)
 
         # 解析結果をJSONファイルとして保存
         results_dir = SHARED_DATA_DIR / "results"

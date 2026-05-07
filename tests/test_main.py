@@ -11,8 +11,18 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.job_store import HighlightInfo, JobPhase
-from app.main import ANALYZER_URL, CLIPPER_URL, app, orchestrator_jobs
-from app.schemas import AnalyzerHighlight, AnalyzerResponse
+from app.main import (
+    ANALYZER_URL,
+    CLIPPER_URL,
+    _flatten_clipped_scores,
+    app,
+    orchestrator_jobs,
+)
+from app.schemas import (
+    AnalyzerFrameResult,
+    AnalyzerHighlight,
+    AnalyzerResponse,
+)
 
 
 @pytest.fixture
@@ -400,3 +410,76 @@ class TestCleanup:
         assert removed == 0
         assert orchestrator_jobs.get(job.job_id) is not None
         assert mp4_file.exists()
+
+
+class TestFlattenClippedScores:
+    """クリップ済み区間のスコア平坦化テスト."""
+
+    def _make_frames(
+        self, scores: list[tuple[float, int, int]]
+    ) -> list[AnalyzerFrameResult]:
+        return [
+            AnalyzerFrameResult(timestamp_seconds=ts, score=sc, score_gain=sg)
+            for ts, sc, sg in scores
+        ]
+
+    def test_clipped_region_replaced_with_average(self):
+        frames = self._make_frames(
+            [
+                (0.0, 2, 1),
+                (5.0, 4, 2),
+                (10.0, 8, 6),
+                (15.0, 10, 8),
+                (20.0, 6, 3),
+                (25.0, 2, 1),
+            ]
+        )
+        highlights = [AnalyzerHighlight(start_seconds=10.0, end_seconds=20.0)]
+
+        _flatten_clipped_scores(frames, highlights)
+
+        avg_score = (2 + 4 + 8 + 10 + 6 + 2) // 6  # 5
+        avg_gain = (1 + 2 + 6 + 8 + 3 + 1) // 6  # 3
+        assert frames[0].score == 2  # 区間外: 変更なし
+        assert frames[1].score == 4  # 区間外: 変更なし
+        assert frames[2].score == avg_score  # 区間内: 平均に置換
+        assert frames[3].score == avg_score  # 区間内: 平均に置換
+        assert frames[4].score == avg_score  # 区間内: 平均に置換
+        assert frames[5].score == 2  # 区間外: 変更なし
+        assert frames[2].score_gain == avg_gain
+        assert frames[3].score_gain == avg_gain
+        assert frames[4].score_gain == avg_gain
+
+    def test_multiple_highlights(self):
+        frames = self._make_frames(
+            [
+                (0.0, 2, 1),
+                (5.0, 10, 8),
+                (10.0, 2, 1),
+                (15.0, 10, 8),
+                (20.0, 2, 1),
+            ]
+        )
+        highlights = [
+            AnalyzerHighlight(start_seconds=5.0, end_seconds=5.0),
+            AnalyzerHighlight(start_seconds=15.0, end_seconds=15.0),
+        ]
+
+        _flatten_clipped_scores(frames, highlights)
+
+        avg_score = (2 + 10 + 2 + 10 + 2) // 5  # 5
+        assert frames[0].score == 2
+        assert frames[1].score == avg_score
+        assert frames[2].score == 2
+        assert frames[3].score == avg_score
+        assert frames[4].score == 2
+
+    def test_empty_frames(self):
+        highlights = [AnalyzerHighlight(start_seconds=0, end_seconds=10)]
+        _flatten_clipped_scores([], highlights)
+
+    def test_no_highlights(self):
+        frames = self._make_frames([(0.0, 5, 3), (5.0, 10, 7)])
+        _flatten_clipped_scores(frames, [])
+        assert frames[0].score == 5
+        assert frames[1].score == 10

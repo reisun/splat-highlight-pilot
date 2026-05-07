@@ -25,3 +25,6 @@
 | 15 | ゲームカウントの正規化（raw/normalized 分離） | [analyzer#23](https://github.com/reisun/splatoon-battle-analyzer/pull/23), [pilot#12](https://github.com/reisun/splat-highlight-pilot/pull/12) |
 | 16 | score_gain の基準値を直近40秒平均に変更 | [analyzer#24](https://github.com/reisun/splatoon-battle-analyzer/pull/24) |
 | 17 | 異常値検出を統計的アプローチに変更（2パスIQR+連続性チェック） | [analyzer#25](https://github.com/reisun/splatoon-battle-analyzer/pull/25), [analyzer#26](https://github.com/reisun/splatoon-battle-analyzer/pull/26) |
+| 18 | 異常値検出を選択的中央値フィルタに改善（radius=3, threshold=40） | [analyzer#28](https://github.com/reisun/splatoon-battle-analyzer/pull/28) |
+| 19 | 出現頻度ベースフィルタに置換（全データ統計で正常範囲を決定） | [analyzer#29](https://github.com/reisun/splatoon-battle-analyzer/pull/29) |
+| 20 | score_gain を未来ベースに変更、スコアリング係数を設定ファイル化 | [analyzer#30](https://github.com/reisun/splatoon-battle-analyzer/pull/30) |
