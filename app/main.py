@@ -252,16 +252,12 @@ def _flatten_clipped_scores(
     frames: list[AnalyzerFrameResult],
     highlights: list[AnalyzerHighlight],
 ) -> None:
-    """クリップ済み区間のスコアを全域平均値に置き換える."""
-    if not frames:
-        return
-    avg_score = sum(f.score for f in frames) // len(frames)
-    avg_score_gain = sum(f.score_gain for f in frames) // len(frames)
+    """クリップ済み区間のスコアを0に置き換え、再選定を防ぐ."""
     for frame in frames:
         for h in highlights:
             if h.start_seconds <= frame.timestamp_seconds <= h.end_seconds:
-                frame.score = avg_score
-                frame.score_gain = avg_score_gain
+                frame.score = 0
+                frame.score_gain = 0
                 break
 
 
