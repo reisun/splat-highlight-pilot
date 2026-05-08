@@ -35,7 +35,6 @@ class FrameInfo:
     score: int = 0
     kills: int = 1
     score_gain: int = 1
-    special: bool = False
     is_dead: bool = False
     my_team_color: str = ""
     enemy_team_color: str = ""
