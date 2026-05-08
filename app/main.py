@@ -289,6 +289,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 }
                 for h in highlights
             ],
+            "scoring": analyzer_result.scoring.model_dump(),
             "frames": [f.model_dump() for f in all_frames],
             "scan_summary": analyzer_result.scan_summary,
         }
