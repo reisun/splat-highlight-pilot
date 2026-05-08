@@ -414,7 +414,7 @@ class TestFlattenClippedScores:
         self, scores: list[tuple[float, int, int]]
     ) -> list[AnalyzerFrameResult]:
         return [
-            AnalyzerFrameResult(timestamp_seconds=ts, score=sc, score_gain=sg)
+            AnalyzerFrameResult(timestamp_seconds=ts, score=sc, score_count_gain=sg)
             for ts, sc, sg in scores
         ]
 
@@ -439,9 +439,9 @@ class TestFlattenClippedScores:
         assert frames[3].score == 0
         assert frames[4].score == 0
         assert frames[5].score == 2
-        assert frames[2].score_gain == 0
-        assert frames[3].score_gain == 0
-        assert frames[4].score_gain == 0
+        assert frames[2].score_count_gain == 0
+        assert frames[3].score_count_gain == 0
+        assert frames[4].score_count_gain == 0
 
     def test_multiple_highlights(self):
         frames = self._make_frames(
