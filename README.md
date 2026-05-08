@@ -35,7 +35,19 @@ Orchestrator (FastAPI, port 8030)
 
 ## Quick Start
 
+> **前提**: 以下のサービスが起動済みであること。起動順に注意。
+>
+> 1. [llm-playground](https://github.com/reisun/llm-playground) — `llm-network` と agent-gateway を提供
+> 2. [splatoon-battle-analyzer](https://github.com/reisun/splatoon-battle-analyzer) — ハイライト検出（port 8020）
+> 3. [movie-edit-pilot](https://github.com/reisun/movie-edit-pilot) — 動画クリッピング（port 8010）
+
 ```bash
+# 1. 依存サービスを先に起動（未起動の場合）
+cd ../llm-playground && docker compose up -d && cd -
+cd ../splatoon-battle-analyzer && docker compose up -d && cd -
+cd ../movie-edit-pilot && docker compose up -d && cd -
+
+# 2. 本サービスを起動
 cp .env.example .env
 docker compose up -d
 curl http://localhost:8030/health
