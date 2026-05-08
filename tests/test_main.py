@@ -418,7 +418,7 @@ class TestFlattenClippedScores:
             for ts, sc, sg in scores
         ]
 
-    def test_clipped_region_replaced_with_average(self):
+    def test_clipped_region_zeroed(self):
         frames = self._make_frames(
             [
                 (0.0, 2, 1),
@@ -433,17 +433,15 @@ class TestFlattenClippedScores:
 
         _flatten_clipped_scores(frames, highlights)
 
-        avg_score = (2 + 4 + 8 + 10 + 6 + 2) // 6  # 5
-        avg_gain = (1 + 2 + 6 + 8 + 3 + 1) // 6  # 3
-        assert frames[0].score == 2  # 区間外: 変更なし
-        assert frames[1].score == 4  # 区間外: 変更なし
-        assert frames[2].score == avg_score  # 区間内: 平均に置換
-        assert frames[3].score == avg_score  # 区間内: 平均に置換
-        assert frames[4].score == avg_score  # 区間内: 平均に置換
-        assert frames[5].score == 2  # 区間外: 変更なし
-        assert frames[2].score_gain == avg_gain
-        assert frames[3].score_gain == avg_gain
-        assert frames[4].score_gain == avg_gain
+        assert frames[0].score == 2
+        assert frames[1].score == 4
+        assert frames[2].score == 0
+        assert frames[3].score == 0
+        assert frames[4].score == 0
+        assert frames[5].score == 2
+        assert frames[2].score_gain == 0
+        assert frames[3].score_gain == 0
+        assert frames[4].score_gain == 0
 
     def test_multiple_highlights(self):
         frames = self._make_frames(
@@ -462,11 +460,10 @@ class TestFlattenClippedScores:
 
         _flatten_clipped_scores(frames, highlights)
 
-        avg_score = (2 + 10 + 2 + 10 + 2) // 5  # 5
         assert frames[0].score == 2
-        assert frames[1].score == avg_score
+        assert frames[1].score == 0
         assert frames[2].score == 2
-        assert frames[3].score == avg_score
+        assert frames[3].score == 0
         assert frames[4].score == 2
 
     def test_empty_frames(self):
