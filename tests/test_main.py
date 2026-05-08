@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 from app.job_store import HighlightInfo, JobPhase
 from app.main import (
     ANALYZER_URL,
-    CLIPPER_URL,
     _flatten_clipped_scores,
     app,
     orchestrator_jobs,
@@ -66,23 +65,17 @@ class TestHealth:
         respx.get(f"{ANALYZER_URL}/health").mock(
             return_value=httpx.Response(200, json={"status": "ok"})
         )
-        respx.get(f"{CLIPPER_URL}/health").mock(
-            return_value=httpx.Response(200, json={"status": "ok"})
-        )
 
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert len(data["services"]) == 2
+        assert len(data["services"]) == 1
         assert all(s["status"] == "connected" for s in data["services"])
 
     @respx.mock
     def test_services_down(self, client):
         respx.get(f"{ANALYZER_URL}/health").mock(
-            side_effect=httpx.ConnectError("Connection refused")
-        )
-        respx.get(f"{CLIPPER_URL}/health").mock(
             side_effect=httpx.ConnectError("Connection refused")
         )
 
@@ -177,11 +170,11 @@ class TestAnalyzerPolling:
             ]
         )
 
-        mock_clipper = AsyncMock(return_value=None)
+        mock_clip = AsyncMock(return_value=None)
 
         with (
             patch("app.main.POLL_INTERVAL", 0),
-            patch("app.main._call_clipper_background", mock_clipper),
+            patch("app.main.clip_video_async", mock_clip),
             client.websocket_connect("/ws/upload") as ws,
         ):
             _send_upload(ws)

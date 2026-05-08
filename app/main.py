@@ -7,7 +7,6 @@ import contextlib
 import json
 import logging
 import os
-import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +15,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from app.clip import clip_video_async
 from app.job_store import HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
     AnalyzerFrameResult,
@@ -24,9 +24,6 @@ from app.schemas import (
     AnalyzerJobStatus,
     AnalyzerOptions,
     AnalyzerResponse,
-    ClipperJobResponse,
-    ClipperJobStatus,
-    ClipSegment,
     ErrorResponse,
     HealthResponse,
     OrchestratorAnalyzerProgress,
@@ -37,7 +34,6 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 ANALYZER_URL = os.environ.get("ANALYZER_URL", "http://analyzer:8000")
-CLIPPER_URL = os.environ.get("CLIPPER_URL", "http://clipper:8000")
 SHARED_DATA_DIR = Path(os.environ.get("SHARED_DATA_DIR", "/shared-data"))
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "300"))
 POLL_INTERVAL = 3
@@ -98,12 +94,11 @@ async def _check_service(
 async def health() -> HealthResponse:
     async with _get_http_client() as client:
         analyzer_status = await _check_service(client, "analyzer", ANALYZER_URL)
-        clipper_status = await _check_service(client, "clipper", CLIPPER_URL)
 
     return HealthResponse(
         status="ok",
         updated_at=_STARTED_AT,
-        services=[analyzer_status, clipper_status],
+        services=[analyzer_status],
     )
 
 
@@ -328,17 +323,13 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         )
 
         segments = [
-            ClipSegment(start=str(h.start_seconds), end=str(h.end_seconds))
+            {"start": str(h.start_seconds), "end": str(h.end_seconds)}
             for h in highlights
         ]
 
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-        await _call_clipper_background(
-            str(upload_path),
-            segments,
-            str(results_dir),
-            job_id,
-        )
+        output_path = results_dir / f"{job_id}.mp4"
+        await clip_video_async(upload_path, segments, output_path)
 
         orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
     except Exception as e:  # noqa: BLE001
@@ -413,71 +404,6 @@ async def _call_analyzer_background(
 
             if job_status.status == "failed":
                 msg = f"analyzer がエラーを返しました: {job_status.error}"
-                raise RuntimeError(msg)
-
-
-async def _call_clipper_background(
-    file_path: str,
-    segments: list[ClipSegment],
-    output_dir: str,
-    job_id: str,
-) -> None:
-    """clipper の非同期ジョブAPIを呼び出し、完了までポーリング."""
-    payload = {
-        "file_path": file_path,
-        "segments": [s.model_dump() for s in segments],
-        "output_dir": output_dir,
-        "output_format": "mp4",
-    }
-
-    async with _get_http_client() as client:
-        try:
-            resp = await client.post(
-                f"{CLIPPER_URL}/clip/jobs",
-                json=payload,
-            )
-        except httpx.RequestError as e:
-            msg = f"clipper への接続に失敗しました: {e}"
-            raise RuntimeError(msg) from e
-
-        if resp.status_code != 200:  # noqa: PLR2004
-            msg = (
-                f"clipper がエラーを返しました (status={resp.status_code}): {resp.text}"
-            )
-            raise RuntimeError(msg)
-
-        clipper_job = ClipperJobResponse(**resp.json())
-        clipper_job_id = clipper_job.job_id
-
-        while True:
-            await asyncio.sleep(POLL_INTERVAL)
-
-            try:
-                resp = await client.get(
-                    f"{CLIPPER_URL}/clip/jobs/{clipper_job_id}",
-                )
-            except httpx.RequestError as e:
-                msg = f"clipper への接続に失敗しました: {e}"
-                raise RuntimeError(msg) from e
-
-            if resp.status_code != 200:  # noqa: PLR2004
-                msg = (
-                    f"clipper がエラーを返しました "
-                    f"(status={resp.status_code}): {resp.text}"
-                )
-                raise RuntimeError(msg)
-
-            status = ClipperJobStatus(**resp.json())
-
-            if status.status == "completed":
-                result_path = Path(status.result_path or "")
-                final = Path(output_dir) / f"{job_id}.mp4"
-                if result_path.exists() and result_path != final:
-                    shutil.move(str(result_path), str(final))
-                return
-
-            if status.status == "failed":
-                msg = f"clipper がエラーを返しました: {status.error}"
                 raise RuntimeError(msg)
 
 
