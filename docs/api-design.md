@@ -21,9 +21,9 @@ REST エンドポイントと WebSocket エンドポイントで構成される�
 ```json
 {
   "status": "ok",
+  "updated_at": "2025-01-01T00:00:00Z",
   "services": [
-    {"name": "analyzer", "status": "connected", "detail": null},
-    {"name": "clipper", "status": "connected", "detail": null}
+    {"name": "analyzer", "status": "connected", "detail": null}
   ]
 }
 ```
