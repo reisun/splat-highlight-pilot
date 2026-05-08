@@ -13,8 +13,9 @@ WebUI (React + Vite)
 Orchestrator (FastAPI, port 8030)
   |
   +---> splatoon-battle-analyzer  ... ハイライト検出
+  |       +---> llm-playground (agent-gateway) ... LLM 解析
   |
-  +---> clipper                   ... 動画クリッピング
+  +---> movie-edit-pilot (clipper) ... 動画クリッピング
   |
   v
 ハイライト動画 + 分析結果JSON
@@ -55,6 +56,18 @@ GitHub Pages にデプロイして使用する。
 | GET | `/download/{job_id}` | ハイライト動画のダウンロード |
 | GET | `/download/{job_id}/analysis` | 分析結果 JSON のダウンロード |
 
+## 依存サービス
+
+本サービスは以下の外部サービスと連携して動作する。
+
+| サービス | 役割 |
+|---------|------|
+| [splatoon-battle-analyzer](https://github.com/reisun/splatoon-battle-analyzer) | ハイライト検出 API |
+| [movie-edit-pilot](https://github.com/reisun/movie-edit-pilot) | 動画クリッピング API（clipper） |
+| [llm-playground](https://github.com/reisun/llm-playground) | LLM 実行基盤（agent-gateway、analyzer が内部で使用） |
+
+接続先は環境変数 `ANALYZER_URL` と `CLIPPER_URL` で設定する（`.env.example` を参照）。
+
 ## テスト
 
 Docker 内で一括実行:
@@ -62,6 +75,12 @@ Docker 内で一括実行:
 ```bash
 docker compose exec api sh -c "ruff check . && ruff format --check . && pytest"
 ```
+
+## 関連プロジェクト
+
+- [splatoon-battle-analyzer](https://github.com/reisun/splatoon-battle-analyzer) - 試合動画のフレーム解析・ハイライト検出
+- [movie-edit-pilot](https://github.com/reisun/movie-edit-pilot) - 動画クリッピング・編集サービス
+- [llm-playground](https://github.com/reisun/llm-playground) - LLM 実行基盤（agent-gateway を提供）
 
 ## License
 
