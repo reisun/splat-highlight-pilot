@@ -41,11 +41,13 @@ class AnalyzerFrameResult(BaseModel):
 
     timestamp_seconds: float
     score: int = 0
-    kills: int = 1
-    score_gain: int = 1
-    is_dead: bool = False
+    score_kills: int = 0
+    score_gain: int = 0
+    score_dead: int = 0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
+    kills: int = 0
+    is_dead: bool = False
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
 
@@ -146,11 +148,13 @@ class OrchestratorFrameInfo(BaseModel):
 
     timestamp_seconds: float
     score: int = 0
-    kills: int = 1
-    score_gain: int = 1
-    is_dead: bool = False
+    score_kills: int = 0
+    score_gain: int = 0
+    score_dead: int = 0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
+    kills: int = 0
+    is_dead: bool = False
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
 
