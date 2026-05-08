@@ -60,6 +60,21 @@ class AnalyzerHighlight(BaseModel):
     peak_intensity: int = 0
 
 
+class AnalyzerScoringInfo(BaseModel):
+    """analyzer レスポンス内のスコア計算説明."""
+
+    model_config = ConfigDict(extra="allow")
+
+    description: str = ""
+    score: str = ""
+    score_kills: str = ""
+    score_count_gain: str = ""
+    score_dead: str = ""
+    weights: dict = Field(default_factory=dict)
+    death_penalty: float = 0
+    count_gain_window_seconds: int = 30
+
+
 class AnalyzerResponse(BaseModel):
     """analyzer の /analyze/highlights レスポンス（必要フィールドのみ）."""
 
@@ -68,6 +83,7 @@ class AnalyzerResponse(BaseModel):
     video: str = ""
     model: str = ""
     highlights: list[AnalyzerHighlight] = Field(default_factory=list)
+    scoring: AnalyzerScoringInfo = Field(default_factory=AnalyzerScoringInfo)
     frames: list[AnalyzerFrameResult] = Field(default_factory=list)
     scan_summary: dict = Field(default_factory=dict)
 
