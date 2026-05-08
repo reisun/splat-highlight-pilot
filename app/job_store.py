@@ -34,7 +34,7 @@ class FrameInfo:
     timestamp_seconds: float
     score: int = 0
     score_kills: int = 0
-    score_gain: int = 0
+    score_count_gain: int = 0
     score_dead: int = 0
     my_team_count: int | None = None
     enemy_team_count: int | None = None

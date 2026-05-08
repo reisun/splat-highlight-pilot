@@ -257,7 +257,7 @@ def _flatten_clipped_scores(
         for h in highlights:
             if h.start_seconds <= frame.timestamp_seconds <= h.end_seconds:
                 frame.score = 0
-                frame.score_gain = 0
+                frame.score_count_gain = 0
                 break
 
 
