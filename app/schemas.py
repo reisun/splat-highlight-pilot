@@ -42,11 +42,9 @@ class AnalyzerFrameResult(BaseModel):
     timestamp_seconds: float
     score: int = 0
     kills: int = 1
-    assists: int = 1
     score_gain: int = 1
     special: int = 1
     is_dead: bool = False
-    description: str = ""
     my_team_color: str = ""
     enemy_team_color: str = ""
     my_team_count: int | None = None
@@ -61,7 +59,6 @@ class AnalyzerHighlight(BaseModel):
     start_seconds: float
     end_seconds: float
     peak_intensity: int = 0
-    description: str = ""
 
 
 class AnalyzerResponse(BaseModel):
@@ -153,11 +150,9 @@ class OrchestratorFrameInfo(BaseModel):
     timestamp_seconds: float
     score: int = 0
     kills: int = 1
-    assists: int = 1
     score_gain: int = 1
     special: int = 1
     is_dead: bool = False
-    description: str = ""
     my_team_color: str = ""
     enemy_team_color: str = ""
     my_team_count: int | None = None
@@ -172,7 +167,6 @@ class OrchestratorHighlightInfo(BaseModel):
     start_seconds: float
     end_seconds: float
     peak_intensity: int = 0
-    description: str = ""
 
 
 class OrchestratorAnalyzerProgress(BaseModel):

@@ -286,7 +286,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                     "start_seconds": h.start_seconds,
                     "end_seconds": h.end_seconds,
                     "peak_intensity": h.peak_intensity,
-                    "description": h.description,
                 }
                 for h in highlights
             ],
@@ -306,7 +305,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 start_seconds=h.start_seconds,
                 end_seconds=h.end_seconds,
                 peak_intensity=h.peak_intensity,
-                description=h.description,
             )
             for h in highlights
         ]

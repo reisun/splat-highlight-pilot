@@ -45,12 +45,8 @@ def _clear_jobs():
 
 
 SAMPLE_HIGHLIGHTS = [
-    AnalyzerHighlight(
-        start_seconds=10.0, end_seconds=20.0, peak_intensity=8, description="kill"
-    ),
-    AnalyzerHighlight(
-        start_seconds=45.0, end_seconds=55.0, peak_intensity=9, description="ult"
-    ),
+    AnalyzerHighlight(start_seconds=10.0, end_seconds=20.0, peak_intensity=8),
+    AnalyzerHighlight(start_seconds=45.0, end_seconds=55.0, peak_intensity=9),
 ]
 
 FAKE_MP4 = b"\x00\x00\x00\x1cftypisom"
@@ -304,7 +300,6 @@ class TestGetJobStatus:
                     start_seconds=10.0,
                     end_seconds=20.0,
                     peak_intensity=8,
-                    description="kill",
                 ),
             ],
         )
