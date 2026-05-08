@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -44,6 +45,7 @@ CLEANUP_INTERVAL = float(os.environ.get("CLEANUP_INTERVAL", "3600"))
 CLEANUP_MAX_AGE = float(os.environ.get("CLEANUP_MAX_AGE", "3600"))
 
 orchestrator_jobs = OrchestratorJobStore()
+_STARTED_AT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @asynccontextmanager
@@ -100,6 +102,7 @@ async def health() -> HealthResponse:
 
     return HealthResponse(
         status="ok",
+        updated_at=_STARTED_AT,
         services=[analyzer_status, clipper_status],
     )
 

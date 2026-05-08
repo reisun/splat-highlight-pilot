@@ -19,6 +19,7 @@ class HealthResponse(BaseModel):
     """ヘルスチェックレスポンス."""
 
     status: str = "ok"
+    updated_at: str | None = None
     services: list[ServiceStatus] = Field(default_factory=list)
 
 
