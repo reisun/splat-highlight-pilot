@@ -1,7 +1,7 @@
 # Splat Highlight Pilot
 
-スプラトゥーン試合動画からハイライトを自動切り出しするオーケストレーターサービス。
-analyzer（ハイライト検出）と clipper（動画クリッピング）を連携させる中間サービス。
+スプラトゥーン試合動画からハイライトを自動切り出しするサービス。
+analyzer（ハイライト検出）と内蔵 FFmpeg クリッピングで動作する。
 
 ## Quick Start
 
@@ -44,6 +44,7 @@ docker compose build
 
 - Python 3.12 + FastAPI
 - httpx（外部サービス連携）
+- FFmpeg（動画クリッピング）
 - Docker for deployment
 - pytest + ruff for testing and linting
 
@@ -51,6 +52,7 @@ docker compose build
 
 - `app/` - アプリケーションソースコード
   - `main.py` - FastAPI アプリとエンドポイント
+  - `clip.py` - FFmpeg ベース動画クリッピング
   - `schemas.py` - Pydantic リクエスト/レスポンスモデル
   - `job_store.py` - インメモリジョブストア（ジョブ状態管理、クリーンアップ）
 - `tests/` - テストスイート
