@@ -5,7 +5,7 @@ function wsUrl(): string {
   return base.replace(/^http/, "ws");
 }
 
-export type Phase = "uploading" | "analyzing" | "clipping" | "done" | "error";
+export type Phase = "uploading" | "scanning" | "analyzing" | "clipping" | "done" | "error";
 
 export interface AnalyzerDetail {
   stage: number;
@@ -15,6 +15,11 @@ export interface AnalyzerDetail {
   started_at: number | null;
 }
 
+export interface MatchDetail {
+  current_match: number;
+  total_matches: number;
+}
+
 export interface ProgressUpdate {
   phase: Phase;
   percent?: number;
@@ -22,6 +27,7 @@ export interface ProgressUpdate {
   analysisUrl?: string;
   message?: string;
   analyzerDetail?: AnalyzerDetail;
+  matchDetail?: MatchDetail;
   jobId?: string;
 }
 
@@ -54,7 +60,14 @@ export function resumeJob(
         }
         const data = await resp.json();
 
-        if (data.phase === "analyzing") {
+        const matchDetail: MatchDetail | undefined = data.match_progress
+          ? {
+              current_match: data.match_progress.current_match,
+              total_matches: data.match_progress.total_matches,
+            }
+          : undefined;
+
+        if (data.phase === "scanning") {
           const detail: AnalyzerDetail | undefined = data.analyzer_progress
             ? {
                 stage: data.analyzer_progress.stage,
@@ -64,9 +77,20 @@ export function resumeJob(
                 started_at: data.started_at,
               }
             : undefined;
-          onProgress({ phase: "analyzing", analyzerDetail: detail });
+          onProgress({ phase: "scanning", analyzerDetail: detail });
+        } else if (data.phase === "analyzing") {
+          const detail: AnalyzerDetail | undefined = data.analyzer_progress
+            ? {
+                stage: data.analyzer_progress.stage,
+                stage_total: data.analyzer_progress.stage_total,
+                frames_done: data.analyzer_progress.frames_done,
+                frames_total: data.analyzer_progress.frames_total,
+                started_at: data.started_at,
+              }
+            : undefined;
+          onProgress({ phase: "analyzing", analyzerDetail: detail, matchDetail });
         } else if (data.phase === "clipping") {
-          onProgress({ phase: "clipping" });
+          onProgress({ phase: "clipping", matchDetail });
         } else if (data.phase === "completed") {
           onProgress({
             phase: "done",
@@ -132,7 +156,7 @@ export function createHighlight(
       case "job_created": {
         const jobId = data.job_id as string;
         localStorage.setItem(STORAGE_KEY, jobId);
-        onProgress({ phase: "analyzing", jobId });
+        onProgress({ phase: "scanning", jobId });
         const { cancel } = resumeJob(jobId, onProgress);
         pollCancel = cancel;
         break;

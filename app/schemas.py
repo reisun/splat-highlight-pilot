@@ -120,6 +120,43 @@ class AnalyzerJobStatus(BaseModel):
     started_at: float | None = None
 
 
+# --- Analyzer 試合境界スキャン関連 ---
+
+
+class MatchBoundary(BaseModel):
+    """analyzer の試合境界スキャン結果内の1試合情報."""
+
+    start_seconds: float
+    duration_seconds: int
+    duration_type: str  # "5min" or "3min"
+
+
+class MatchScanResult(BaseModel):
+    """analyzer の /analyze/matches/scan/jobs 完了時の結果."""
+
+    matches: list[MatchBoundary] = Field(default_factory=list)
+
+
+class MatchScanJobProgress(BaseModel):
+    """analyzer の試合境界スキャンジョブ進捗."""
+
+    frames_done: int = 0
+    frames_total: int = 0
+
+
+class MatchScanJobStatus(BaseModel):
+    """analyzer の /analyze/matches/scan/jobs/{job_id} GET レスポンス."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    status: str
+    progress: MatchScanJobProgress | None = None
+    result: MatchScanResult | None = None
+    error: str | None = None
+    started_at: float | None = None
+
+
 # --- エラー ---
 
 
@@ -165,12 +202,20 @@ class OrchestratorAnalyzerProgress(BaseModel):
     frames_total: int = 0
 
 
+class OrchestratorMatchProgress(BaseModel):
+    """試合ごとの進捗."""
+
+    current_match: int = 0
+    total_matches: int = 0
+
+
 class OrchestratorJobStatusResponse(BaseModel):
     """GET /jobs/{job_id} レスポンス."""
 
     job_id: str
     phase: str
     analyzer_progress: OrchestratorAnalyzerProgress | None = None
+    match_progress: OrchestratorMatchProgress | None = None
     download_url: str | None = None
     analysis_url: str | None = None
     error: str | None = None

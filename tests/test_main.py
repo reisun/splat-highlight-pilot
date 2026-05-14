@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import zipfile
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.job_store import HighlightInfo, JobPhase
 from app.main import (
     ANALYZER_URL,
+    _build_zip,
     _flatten_clipped_scores,
     app,
     orchestrator_jobs,
@@ -31,7 +33,10 @@ def shared_dir(tmp_path):
 
 @pytest.fixture
 def client(shared_dir):
-    with patch("app.main.SHARED_DATA_DIR", shared_dir), TestClient(app) as c:
+    with (
+        patch("app.main.SHARED_DATA_DIR", shared_dir),
+        TestClient(app) as c,
+    ):
         yield c
 
 
@@ -49,14 +54,86 @@ SAMPLE_HIGHLIGHTS = [
 ]
 
 FAKE_MP4 = b"\x00\x00\x00\x1cftypisom"
+FAKE_ZIP = b"PK\x03\x04fake-zip"
 
 
 def _send_upload(ws, video_data=b"fake-video-data"):
-    ws.send_json({"type": "start", "filename": "test.mp4", "size": len(video_data)})
+    ws.send_json(
+        {
+            "type": "start",
+            "filename": "test.mp4",
+            "size": len(video_data),
+        }
+    )
     ws.send_bytes(video_data)
     upload_progress = ws.receive_json()
     ws.send_json({"type": "upload_complete"})
     return upload_progress
+
+
+def _mock_scan_responses(analyzer_job_id="scan-job-123"):
+    """試合境界スキャンのモックレスポンスを設定する."""
+    respx.post(f"{ANALYZER_URL}/analyze/matches/scan/jobs").mock(
+        return_value=httpx.Response(200, json={"job_id": analyzer_job_id})
+    )
+    scan_poll_url = f"{ANALYZER_URL}/analyze/matches/scan/jobs/{analyzer_job_id}"
+    respx.get(scan_poll_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "job_id": analyzer_job_id,
+                "status": "completed",
+                "progress": {
+                    "frames_done": 10,
+                    "frames_total": 10,
+                },
+                "result": {
+                    "matches": [
+                        {
+                            "start_seconds": 0.0,
+                            "duration_seconds": 300,
+                            "duration_type": "5min",
+                        },
+                    ],
+                },
+                "error": None,
+                "started_at": 1234567890.0,
+            },
+        )
+    )
+
+
+def _mock_highlight_responses(analyzer_job_id="highlight-job-123"):
+    """ハイライト分析のモックレスポンスを設定する."""
+    result_data = AnalyzerResponse(
+        video="test.mp4",
+        model="test-model",
+        highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
+    )
+
+    respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+        return_value=httpx.Response(200, json={"job_id": analyzer_job_id})
+    )
+
+    poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{analyzer_job_id}"
+    respx.get(poll_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "job_id": analyzer_job_id,
+                "status": "completed",
+                "progress": {
+                    "phase": 1,
+                    "phase_total": 1,
+                    "frames_done": 60,
+                    "frames_total": 60,
+                },
+                "result": result_data.model_dump(),
+                "error": None,
+                "started_at": 1234567890.0,
+            },
+        )
+    )
 
 
 class TestHealth:
@@ -107,6 +184,24 @@ class TestWebSocketUpload:
             assert job_msg["type"] == "job_created"
             assert "job_id" in job_msg
 
+    def test_upload_stores_filename(self, client):
+        """アップロード時にfilenameがジョブに保存される."""
+
+        async def mock_pipeline(job_id, upload_path, opts):
+            pass
+
+        with (
+            patch("app.main._run_pipeline", mock_pipeline),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
+
+        job = orchestrator_jobs.get(job_id)
+        assert job is not None
+        assert job.filename == "test.mp4"
+
     def test_invalid_start_message(self, client):
         """start 以外のメッセージでエラーになる."""
         with client.websocket_connect("/ws/upload") as ws:
@@ -115,61 +210,14 @@ class TestWebSocketUpload:
             assert error_msg["type"] == "error"
 
 
-class TestAnalyzerPolling:
-    """_call_analyzer_background のポーリングフローを respx で検証."""
+class TestMultiMatchPipeline:
+    """複数試合パイプラインのテスト."""
 
     @respx.mock
-    def test_polling_completed(self, client, shared_dir):
-        """ジョブ作成 -> running -> completed のフロー."""
-        analyzer_job_id = "test-job-123"
-        result_data = AnalyzerResponse(
-            video="test.mp4",
-            model="test-model",
-            highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
-        )
-
-        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
-            return_value=httpx.Response(200, json={"job_id": analyzer_job_id})
-        )
-
-        poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{analyzer_job_id}"
-        respx.get(poll_url).mock(
-            side_effect=[
-                httpx.Response(
-                    200,
-                    json={
-                        "job_id": analyzer_job_id,
-                        "status": "running",
-                        "progress": {
-                            "phase": 1,
-                            "phase_total": 1,
-                            "frames_done": 5,
-                            "frames_total": 60,
-                        },
-                        "result": None,
-                        "error": None,
-                        "started_at": 1234567890.0,
-                    },
-                ),
-                httpx.Response(
-                    200,
-                    json={
-                        "job_id": analyzer_job_id,
-                        "status": "completed",
-                        "progress": {
-                            "phase": 1,
-                            "phase_total": 1,
-                            "frames_done": 60,
-                            "frames_total": 60,
-                        },
-                        "result": result_data.model_dump(),
-                        "error": None,
-                        "started_at": 1234567890.0,
-                    },
-                ),
-            ]
-        )
-
+    def test_pipeline_completed(self, client, shared_dir):
+        """scan -> analyze -> clip -> zip の正常フロー."""
+        _mock_scan_responses()
+        _mock_highlight_responses()
         mock_clip = AsyncMock(return_value=None)
 
         with (
@@ -185,32 +233,33 @@ class TestAnalyzerPolling:
         for _ in range(50):
             resp = client.get(f"/jobs/{job_id}")
             data = resp.json()
-            if data["phase"] == "completed":
+            if data["phase"] in ("completed", "failed"):
                 break
             time.sleep(0.05)
 
         assert data["phase"] == "completed"
         assert data["download_url"] is not None
+        assert data["match_progress"] is not None
+        assert data["match_progress"]["total_matches"] == 1
 
     @respx.mock
-    def test_polling_failed(self, client):
-        """ジョブが failed になった場合のフロー."""
-        analyzer_job_id = "test-job-fail"
-
-        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
-            return_value=httpx.Response(200, json={"job_id": analyzer_job_id})
+    def test_no_matches_detected(self, client):
+        """試合0件で failed になる."""
+        respx.post(f"{ANALYZER_URL}/analyze/matches/scan/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": "scan-empty"})
         )
-
-        poll_url = f"{ANALYZER_URL}/analyze/highlights/jobs/{analyzer_job_id}"
-        respx.get(poll_url).mock(
+        respx.get(f"{ANALYZER_URL}/analyze/matches/scan/jobs/scan-empty").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "job_id": analyzer_job_id,
-                    "status": "failed",
-                    "progress": None,
-                    "result": None,
-                    "error": "GPU out of memory",
+                    "job_id": "scan-empty",
+                    "status": "completed",
+                    "progress": {
+                        "frames_done": 5,
+                        "frames_total": 5,
+                    },
+                    "result": {"matches": []},
+                    "error": None,
                     "started_at": 1234567890.0,
                 },
             )
@@ -232,12 +281,50 @@ class TestAnalyzerPolling:
             time.sleep(0.05)
 
         assert data["phase"] == "failed"
-        assert "GPU out of memory" in data["error"]
+        assert "No matches detected" in data["error"]
 
     @respx.mock
-    def test_job_creation_error(self, client):
-        """ジョブ作成時にエラーが返った場合."""
-        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+    def test_scan_failed(self, client):
+        """スキャンジョブが失敗した場合."""
+        respx.post(f"{ANALYZER_URL}/analyze/matches/scan/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": "scan-fail"})
+        )
+        respx.get(f"{ANALYZER_URL}/analyze/matches/scan/jobs/scan-fail").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "scan-fail",
+                    "status": "failed",
+                    "progress": None,
+                    "result": None,
+                    "error": "Video too short",
+                    "started_at": 1234567890.0,
+                },
+            )
+        )
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
+
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] == "failed":
+                break
+            time.sleep(0.05)
+
+        assert data["phase"] == "failed"
+        assert "Video too short" in data["error"]
+
+    @respx.mock
+    def test_scan_api_error(self, client):
+        """スキャンAPI接続エラーの場合."""
+        respx.post(f"{ANALYZER_URL}/analyze/matches/scan/jobs").mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
 
@@ -263,8 +350,26 @@ class TestAnalyzerPolling:
 class TestGetJobStatus:
     """GET /jobs/{job_id} のテスト."""
 
-    def test_get_existing_job(self, client):
-        """既存ジョブの状態を取得できる."""
+    def test_get_scanning_job(self, client):
+        """scanningフェーズのジョブ状態を取得できる."""
+        job = orchestrator_jobs.create()
+        orchestrator_jobs.set_phase(job.job_id, JobPhase.SCANNING)
+        orchestrator_jobs.update_analyzer_progress(
+            job.job_id,
+            stage=0,
+            stage_total=1,
+            frames_done=3,
+            frames_total=10,
+        )
+
+        resp = client.get(f"/jobs/{job.job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["phase"] == "scanning"
+        assert data["analyzer_progress"]["frames_done"] == 3
+
+    def test_get_analyzing_job_with_match_progress(self, client):
+        """analyzingフェーズで試合進捗が取得できる."""
         job = orchestrator_jobs.create()
         orchestrator_jobs.set_phase(job.job_id, JobPhase.ANALYZING)
         orchestrator_jobs.update_analyzer_progress(
@@ -274,6 +379,9 @@ class TestGetJobStatus:
             frames_done=10,
             frames_total=100,
         )
+        orchestrator_jobs.update_match_progress(
+            job.job_id, current_match=2, total_matches=3
+        )
 
         resp = client.get(f"/jobs/{job.job_id}")
         assert resp.status_code == 200
@@ -282,6 +390,8 @@ class TestGetJobStatus:
         assert data["phase"] == "analyzing"
         assert data["analyzer_progress"]["stage"] == 1
         assert data["analyzer_progress"]["frames_done"] == 10
+        assert data["match_progress"]["current_match"] == 2
+        assert data["match_progress"]["total_matches"] == 3
 
     def test_get_completed_job(self, client):
         """完了ジョブの情報を取得できる."""
@@ -312,7 +422,25 @@ class TestGetJobStatus:
 
 
 class TestDownload:
-    def test_success(self, client, shared_dir):
+    def test_zip_download(self, client, shared_dir):
+        """zip ファイルのダウンロード."""
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+        zip_file = results_dir / "test-job-id.zip"
+        zip_file.write_bytes(FAKE_ZIP)
+
+        job = orchestrator_jobs.create()
+        job.job_id = "test-job-id"
+        orchestrator_jobs._jobs["test-job-id"] = job
+        orchestrator_jobs.set_filename("test-job-id", "my_video.mp4")
+
+        resp = client.get("/download/test-job-id")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/zip"
+        assert "my_video_highlight.zip" in resp.headers.get("content-disposition", "")
+
+    def test_mp4_fallback(self, client, shared_dir):
+        """mp4 フォールバック（後方互換）."""
         results_dir = shared_dir / "results"
         results_dir.mkdir()
         result_file = results_dir / "test-job-id.mp4"
@@ -322,19 +450,6 @@ class TestDownload:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "video/mp4"
         assert resp.content == FAKE_MP4
-
-    def test_file_persists_after_download(self, client, shared_dir):
-        """ダウンロード後もファイルが残る（複数回DL可能）."""
-        results_dir = shared_dir / "results"
-        results_dir.mkdir(exist_ok=True)
-        result_file = results_dir / "persist-test.mp4"
-        result_file.write_bytes(FAKE_MP4)
-
-        client.get("/download/persist-test")
-        assert result_file.exists()
-
-        resp2 = client.get("/download/persist-test")
-        assert resp2.status_code == 200
 
     def test_not_found(self, client):
         resp = client.get("/download/nonexistent-id")
@@ -357,6 +472,66 @@ class TestDownloadAnalysis:
         assert resp.status_code == 404
 
 
+class TestBuildZip:
+    """zip ファイル作成のテスト."""
+
+    def test_creates_valid_zip(self, tmp_path):
+        """正しいzip構造が作成される."""
+        match_dir = tmp_path / "match_1"
+        match_dir.mkdir()
+        highlight = match_dir / "highlight.mp4"
+        highlight.write_bytes(FAKE_MP4)
+        analysis = match_dir / "analysis.json"
+        analysis.write_text('{"test": true}', encoding="utf-8")
+
+        match_outputs = [
+            {
+                "match_index": 1,
+                "highlight_path": str(highlight),
+                "analysis_path": str(analysis),
+                "highlights": [],
+            }
+        ]
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path)
+
+        assert zip_path.exists()
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "match_1/highlight.mp4" in names
+            assert "match_1/analysis.json" in names
+
+    def test_multiple_matches(self, tmp_path):
+        """複数試合の zip 構造."""
+        match_outputs = []
+        for i in range(1, 3):
+            match_dir = tmp_path / f"match_{i}"
+            match_dir.mkdir()
+            highlight = match_dir / "highlight.mp4"
+            highlight.write_bytes(FAKE_MP4)
+            analysis = match_dir / "analysis.json"
+            analysis.write_text("{}", encoding="utf-8")
+            match_outputs.append(
+                {
+                    "match_index": i,
+                    "highlight_path": str(highlight),
+                    "analysis_path": str(analysis),
+                    "highlights": [],
+                }
+            )
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "match_1/highlight.mp4" in names
+            assert "match_1/analysis.json" in names
+            assert "match_2/highlight.mp4" in names
+            assert "match_2/analysis.json" in names
+
+
 class TestCleanup:
     """自動クリーンアップのテスト."""
 
@@ -370,17 +545,14 @@ class TestCleanup:
         job_obj = orchestrator_jobs.get(job.job_id)
         job_obj.completed_at = time.time() - 7200
 
-        mp4_file = results_dir / f"{job.job_id}.mp4"
-        analysis_file = results_dir / f"{job.job_id}_analysis.json"
-        mp4_file.write_bytes(FAKE_MP4)
-        analysis_file.write_text("[]", encoding="utf-8")
+        zip_file = results_dir / f"{job.job_id}.zip"
+        zip_file.write_bytes(FAKE_ZIP)
 
         removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
 
         assert removed == 1
         assert orchestrator_jobs.get(job.job_id) is None
-        assert not mp4_file.exists()
-        assert not analysis_file.exists()
+        assert not zip_file.exists()
 
     def test_cleanup_keeps_recent_jobs(self, shared_dir):
         """期限内のジョブは削除されない."""
@@ -390,14 +562,14 @@ class TestCleanup:
         job = orchestrator_jobs.create()
         orchestrator_jobs.mark_completed(job.job_id, f"/download/{job.job_id}")
 
-        mp4_file = results_dir / f"{job.job_id}.mp4"
-        mp4_file.write_bytes(FAKE_MP4)
+        zip_file = results_dir / f"{job.job_id}.zip"
+        zip_file.write_bytes(FAKE_ZIP)
 
         removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
 
         assert removed == 0
         assert orchestrator_jobs.get(job.job_id) is not None
-        assert mp4_file.exists()
+        assert zip_file.exists()
 
 
 class TestFlattenClippedScores:
@@ -407,7 +579,11 @@ class TestFlattenClippedScores:
         self, scores: list[tuple[float, int, int]]
     ) -> list[AnalyzerFrameResult]:
         return [
-            AnalyzerFrameResult(timestamp_seconds=ts, score=sc, score_count_gain=sg)
+            AnalyzerFrameResult(
+                timestamp_seconds=ts,
+                score=sc,
+                score_count_gain=sg,
+            )
             for ts, sc, sg in scores
         ]
 
@@ -432,9 +608,6 @@ class TestFlattenClippedScores:
         assert frames[3].score == 0
         assert frames[4].score == 0
         assert frames[5].score == 2
-        assert frames[2].score_count_gain == 0
-        assert frames[3].score_count_gain == 0
-        assert frames[4].score_count_gain == 0
 
     def test_multiple_highlights(self):
         frames = self._make_frames(

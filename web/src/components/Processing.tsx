@@ -1,13 +1,14 @@
-import type { AnalyzerDetail } from "../api";
+import type { AnalyzerDetail, MatchDetail } from "../api";
 
 interface ProcessingProps {
-  phase: "uploading" | "analyzing" | "clipping";
+  phase: "uploading" | "scanning" | "analyzing" | "clipping";
   fileName: string;
   percent?: number;
   analyzerDetail?: AnalyzerDetail;
+  matchDetail?: MatchDetail;
 }
 
-export default function Processing({ phase, fileName, percent, analyzerDetail }: ProcessingProps) {
+export default function Processing({ phase, fileName, percent, analyzerDetail, matchDetail }: ProcessingProps) {
   const formatElapsed = (startedAt: number | null): string => {
     if (!startedAt) return "";
     const elapsed = Math.floor(Date.now() / 1000 - startedAt);
@@ -33,10 +34,24 @@ export default function Processing({ phase, fileName, percent, analyzerDetail }:
       ) : (
         <>
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-6" />
-          {phase === "analyzing" && analyzerDetail ? (
+          {phase === "scanning" ? (
+            <>
+              <p className="text-lg font-medium text-gray-700">
+                Scanning for matches...
+              </p>
+              {analyzerDetail && analyzerDetail.frames_total > 0 && (
+                <p className="text-sm text-gray-500 mt-1">
+                  Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
+                </p>
+              )}
+            </>
+          ) : phase === "analyzing" && analyzerDetail ? (
             <>
               <p className="text-lg font-medium text-gray-700">
                 Analyzing...
+                {matchDetail && matchDetail.total_matches > 0 && (
+                  <span className="text-base"> (Match {matchDetail.current_match}/{matchDetail.total_matches})</span>
+                )}
               </p>
               <p className="text-sm text-gray-500 mt-1">
                 Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
@@ -50,6 +65,9 @@ export default function Processing({ phase, fileName, percent, analyzerDetail }:
               {phase === "analyzing"
                 ? "Detecting highlights..."
                 : "Creating highlight clip..."}
+              {matchDetail && matchDetail.total_matches > 0 && (
+                <span className="text-base"> (Match {matchDetail.current_match}/{matchDetail.total_matches})</span>
+              )}
             </p>
           )}
         </>

@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,8 +27,10 @@ from app.schemas import (
     AnalyzerResponse,
     ErrorResponse,
     HealthResponse,
+    MatchScanJobStatus,
     OrchestratorAnalyzerProgress,
     OrchestratorJobStatusResponse,
+    OrchestratorMatchProgress,
     ServiceStatus,
 )
 
@@ -56,8 +59,8 @@ async def lifespan(_app: FastAPI):  # noqa: ANN201
 
 app = FastAPI(
     title="Splat Highlight Pilot",
-    description="スプラトゥーン試合動画ハイライト自動切り出しオーケストレーター",
-    version="0.3.0",
+    description=("スプラトゥーン試合動画ハイライト自動切り出しオーケストレーター"),
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -107,16 +110,33 @@ async def health() -> HealthResponse:
     responses={404: {"model": ErrorResponse}},
 )
 async def download(job_id: str) -> FileResponse:
-    result_path = SHARED_DATA_DIR / "results" / f"{job_id}.mp4"
-    if not result_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+    """zip または mp4 のダウンロード."""
+    # zip を優先
+    zip_path = SHARED_DATA_DIR / "results" / f"{job_id}.zip"
+    if zip_path.exists():
+        job = orchestrator_jobs.get(job_id)
+        zip_filename = "highlight.zip"
+        if job and job.filename:
+            stem = Path(job.filename).stem
+            zip_filename = f"{stem}_highlight.zip"
+        return FileResponse(
+            path=str(zip_path),
+            media_type="application/zip",
+            filename=zip_filename,
+            headers={"Content-Disposition": (f'attachment; filename="{zip_filename}"')},
+        )
 
-    return FileResponse(
-        path=str(result_path),
-        media_type="video/mp4",
-        filename="highlight.mp4",
-        headers={"Content-Disposition": 'attachment; filename="highlight.mp4"'},
-    )
+    # 後方互換: 旧形式の mp4
+    mp4_path = SHARED_DATA_DIR / "results" / f"{job_id}.mp4"
+    if mp4_path.exists():
+        return FileResponse(
+            path=str(mp4_path),
+            media_type="video/mp4",
+            filename="highlight.mp4",
+            headers={"Content-Disposition": ('attachment; filename="highlight.mp4"')},
+        )
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.get(
@@ -138,19 +158,33 @@ async def download_analysis(job_id: str) -> FileResponse:
 
 
 @app.get("/jobs/{job_id}", response_model=OrchestratorJobStatusResponse)
-async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
+async def get_job_status(
+    job_id: str,
+) -> OrchestratorJobStatusResponse:
     """ジョブの状態を返す."""
     job = orchestrator_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     progress = None
-    if job.phase in (JobPhase.ANALYZING, JobPhase.CLIPPING, JobPhase.COMPLETED):
+    if job.phase in (
+        JobPhase.SCANNING,
+        JobPhase.ANALYZING,
+        JobPhase.CLIPPING,
+        JobPhase.COMPLETED,
+    ):
         progress = OrchestratorAnalyzerProgress(
             stage=job.analyzer_progress.stage,
             stage_total=job.analyzer_progress.stage_total,
             frames_done=job.analyzer_progress.frames_done,
             frames_total=job.analyzer_progress.frames_total,
+        )
+
+    match_progress = None
+    if job.match_progress.total_matches > 0:
+        match_progress = OrchestratorMatchProgress(
+            current_match=job.match_progress.current_match,
+            total_matches=job.match_progress.total_matches,
         )
 
     analysis_url = (
@@ -161,6 +195,7 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
         job_id=job.job_id,
         phase=job.phase.value,
         analyzer_progress=progress,
+        match_progress=match_progress,
         download_url=job.download_url,
         analysis_url=analysis_url,
         error=job.error,
@@ -170,7 +205,7 @@ async def get_job_status(job_id: str) -> OrchestratorJobStatusResponse:
 
 @app.websocket("/ws/upload")
 async def ws_upload(websocket: WebSocket) -> None:
-    """動画アップロード専用WebSocket。アップロード完了後にjob_idを返してclose."""
+    """動画アップロード専用WebSocket。"""
     await websocket.accept()
     upload_path: Path | None = None
 
@@ -191,6 +226,8 @@ async def ws_upload(websocket: WebSocket) -> None:
         job = orchestrator_jobs.create()
         job_id = job.job_id
 
+        orchestrator_jobs.set_filename(job_id, filename)
+
         upload_dir = SHARED_DATA_DIR / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
         upload_path = upload_dir / f"{job_id}_{filename}"
@@ -205,7 +242,10 @@ async def ws_upload(websocket: WebSocket) -> None:
                     if text_data.get("type") == "upload_complete":
                         break
                     await websocket.send_json(
-                        {"type": "error", "message": "Unexpected message"}
+                        {
+                            "type": "error",
+                            "message": "Unexpected message",
+                        }
                     )
                     await websocket.close()
                     return
@@ -260,76 +300,146 @@ def _flatten_clipped_scores(
 
 
 async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -> None:
-    """バックグラウンドでanalyze->clipパイプラインを実行."""
+    """バックグラウンドで scan -> analyze(per match) -> clip -> zip."""
     try:
-        orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-        analyzer_result = await _call_analyzer_background(
-            job_id, str(upload_path), opts
-        )
+        # --- Phase 1: Scanning ---
+        orchestrator_jobs.set_phase(job_id, JobPhase.SCANNING)
+        matches = await _call_match_scan(job_id, str(upload_path))
 
-        if not analyzer_result or not analyzer_result.highlights:
-            orchestrator_jobs.mark_failed(job_id, "No highlights detected")
+        if not matches:
+            orchestrator_jobs.mark_failed(job_id, "No matches detected")
             return
 
-        highlights = analyzer_result.highlights
-        all_frames = analyzer_result.frames
+        total_matches = len(matches)
+        orchestrator_jobs.update_match_progress(job_id, 0, total_matches)
 
-        # 解析結果をJSONファイルとして保存（元のスコアを保持）
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
-        analysis_path = results_dir / f"{job_id}_analysis.json"
-        analysis_data = {
-            "highlights": [
-                {
-                    "start_seconds": h.start_seconds,
-                    "end_seconds": h.end_seconds,
-                    "peak_intensity": h.peak_intensity,
-                }
-                for h in highlights
-            ],
-            "scoring": analyzer_result.scoring.model_dump(),
-            "frames": [f.model_dump() for f in all_frames],
-            "scan_summary": analyzer_result.scan_summary,
-        }
 
-        _flatten_clipped_scores(all_frames, highlights)
-        analysis_path.write_text(
-            json.dumps(analysis_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # --- Phase 2: Per-match analysis + clipping ---
+        orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
+        match_outputs: list[dict] = []
 
-        # ハイライト情報を保存してログに出力
-        highlight_infos = [
-            HighlightInfo(
-                start_seconds=h.start_seconds,
-                end_seconds=h.end_seconds,
-                peak_intensity=h.peak_intensity,
+        for i, match in enumerate(matches):
+            orchestrator_jobs.update_match_progress(job_id, i + 1, total_matches)
+
+            match_start = match["start_seconds"]
+            match_duration = match["duration_seconds"]
+            match_end = match_start + match_duration
+
+            match_opts = AnalyzerOptions(
+                start=match_start,
+                end=match_end,
+                interval=opts.interval,
+                threshold=opts.threshold,
+                model=opts.model,
+                concurrency=opts.concurrency,
             )
-            for h in highlights
-        ]
-        orchestrator_jobs.set_highlights(job_id, highlight_infos)
 
-        logger.info(
-            "ハイライト検出完了 job=%s: %s",
-            job_id,
-            [
+            analyzer_result = await _call_analyzer_background(
+                job_id, str(upload_path), match_opts
+            )
+
+            if not analyzer_result or not analyzer_result.highlights:
+                logger.warning(
+                    "試合 %d/%d でハイライト未検出 job=%s",
+                    i + 1,
+                    total_matches,
+                    job_id,
+                )
+                continue
+
+            highlights = analyzer_result.highlights
+            all_frames = analyzer_result.frames
+
+            analysis_data = {
+                "match_index": i + 1,
+                "match_start_seconds": match_start,
+                "match_duration_seconds": match_duration,
+                "match_duration_type": match.get("duration_type", "unknown"),
+                "highlights": [
+                    {
+                        "start_seconds": h.start_seconds,
+                        "end_seconds": h.end_seconds,
+                        "peak_intensity": h.peak_intensity,
+                    }
+                    for h in highlights
+                ],
+                "scoring": analyzer_result.scoring.model_dump(),
+                "frames": [f.model_dump() for f in all_frames],
+                "scan_summary": analyzer_result.scan_summary,
+            }
+
+            _flatten_clipped_scores(all_frames, highlights)
+
+            segments = [
                 {
-                    "start": h.start_seconds,
-                    "end": h.end_seconds,
-                    "intensity": h.peak_intensity,
+                    "start": str(h.start_seconds),
+                    "end": str(h.end_seconds),
                 }
                 for h in highlights
-            ],
-        )
+            ]
 
-        segments = [
-            {"start": str(h.start_seconds), "end": str(h.end_seconds)}
-            for h in highlights
-        ]
+            match_dir = results_dir / f"{job_id}_match_{i + 1}"
+            match_dir.mkdir(parents=True, exist_ok=True)
 
+            analysis_path = match_dir / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            highlight_path = match_dir / "highlight.mp4"
+
+            orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
+            await clip_video_async(upload_path, segments, highlight_path)
+            orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
+
+            match_outputs.append(
+                {
+                    "match_index": i + 1,
+                    "highlight_path": str(highlight_path),
+                    "analysis_path": str(analysis_path),
+                    "highlights": [
+                        {
+                            "start_seconds": h.start_seconds,
+                            "end_seconds": h.end_seconds,
+                            "peak_intensity": h.peak_intensity,
+                        }
+                        for h in highlights
+                    ],
+                }
+            )
+
+        if not match_outputs:
+            orchestrator_jobs.mark_failed(job_id, "No highlights detected in any match")
+            return
+
+        # --- Phase 3: Build zip ---
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-        output_path = results_dir / f"{job_id}.mp4"
-        await clip_video_async(upload_path, segments, output_path)
+        zip_path = results_dir / f"{job_id}.zip"
+        _build_zip(match_outputs, zip_path)
+
+        # Collect all highlights for job store
+        all_highlights = []
+        for mo in match_outputs:
+            for h in mo["highlights"]:
+                all_highlights.append(
+                    HighlightInfo(
+                        start_seconds=h["start_seconds"],
+                        end_seconds=h["end_seconds"],
+                        peak_intensity=h["peak_intensity"],
+                    )
+                )
+        orchestrator_jobs.set_highlights(job_id, all_highlights)
+
+        # Cleanup temp match dirs
+        for mo in match_outputs:
+            _cleanup_file(Path(mo["highlight_path"]))
+            _cleanup_file(Path(mo["analysis_path"]))
+            match_dir = Path(mo["highlight_path"]).parent
+            with contextlib.suppress(OSError):
+                match_dir.rmdir()
 
         orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
     except Exception as e:  # noqa: BLE001
@@ -337,6 +447,89 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         orchestrator_jobs.mark_failed(job_id, str(e))
     finally:
         _cleanup_file(upload_path)
+
+
+def _build_zip(match_outputs: list[dict], zip_path: Path) -> None:
+    """試合ごとのハイライトと分析結果を zip にまとめる."""
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for mo in match_outputs:
+            match_idx = mo["match_index"]
+            prefix = f"match_{match_idx}"
+
+            highlight_path = Path(mo["highlight_path"])
+            if highlight_path.exists():
+                zf.write(highlight_path, f"{prefix}/highlight.mp4")
+
+            analysis_path = Path(mo["analysis_path"])
+            if analysis_path.exists():
+                zf.write(analysis_path, f"{prefix}/analysis.json")
+
+
+async def _call_match_scan(
+    job_id: str,
+    file_path: str,
+) -> list[dict]:
+    """analyzer の試合境界スキャンAPIを呼び出す."""
+    payload = {"file_path": file_path}
+
+    async with _get_http_client() as client:
+        try:
+            resp = await client.post(
+                f"{ANALYZER_URL}/analyze/matches/scan/jobs",
+                json=payload,
+            )
+        except httpx.RequestError as e:
+            msg = f"analyzer への接続に失敗しました: {e}"
+            raise RuntimeError(msg) from e
+
+        if resp.status_code != 200:  # noqa: PLR2004
+            msg = (
+                f"analyzer がエラーを返しました "
+                f"(status={resp.status_code}): {resp.text}"
+            )
+            raise RuntimeError(msg)
+
+        scan_job_data = resp.json()
+        scan_job_id = scan_job_data["job_id"]
+
+        while True:
+            await asyncio.sleep(POLL_INTERVAL)
+
+            try:
+                resp = await client.get(
+                    f"{ANALYZER_URL}/analyze/matches/scan/jobs/{scan_job_id}",
+                )
+            except httpx.RequestError as e:
+                msg = f"analyzer への接続に失敗しました: {e}"
+                raise RuntimeError(msg) from e
+
+            if resp.status_code != 200:  # noqa: PLR2004
+                msg = (
+                    f"analyzer がエラーを返しました "
+                    f"(status={resp.status_code}): {resp.text}"
+                )
+                raise RuntimeError(msg)
+
+            scan_status = MatchScanJobStatus(**resp.json())
+
+            if scan_status.progress:
+                orchestrator_jobs.update_analyzer_progress(
+                    job_id,
+                    stage=0,
+                    stage_total=1,
+                    frames_done=scan_status.progress.frames_done,
+                    frames_total=scan_status.progress.frames_total,
+                )
+
+            if scan_status.status == "completed":
+                if scan_status.result:
+                    return [m.model_dump() for m in scan_status.result.matches]
+                return []
+
+            if scan_status.status == "failed":
+                msg = f"analyzer スキャンエラー: {scan_status.error}"
+                raise RuntimeError(msg)
 
 
 async def _call_analyzer_background(

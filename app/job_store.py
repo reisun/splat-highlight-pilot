@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class JobPhase(StrEnum):
     UPLOADING = "uploading"
+    SCANNING = "scanning"
     ANALYZING = "analyzing"
     CLIPPING = "clipping"
     COMPLETED = "completed"
@@ -27,6 +28,14 @@ class AnalyzerProgress:
     stage_total: int = 1
     frames_done: int = 0
     frames_total: int = 0
+
+
+@dataclass
+class MatchProgress:
+    """試合ごとの進捗."""
+
+    current_match: int = 0
+    total_matches: int = 0
 
 
 @dataclass
@@ -56,12 +65,14 @@ class OrchestratorJob:
     job_id: str
     phase: JobPhase = JobPhase.UPLOADING
     analyzer_progress: AnalyzerProgress = field(default_factory=AnalyzerProgress)
+    match_progress: MatchProgress = field(default_factory=MatchProgress)
     highlights: list[HighlightInfo] = field(default_factory=list)
     download_url: str | None = None
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     upload_path: str | None = None
+    filename: str | None = None
 
 
 class OrchestratorJobStore:
@@ -94,6 +105,12 @@ class OrchestratorJobStore:
             if job:
                 job.upload_path = path
 
+    def set_filename(self, job_id: str, filename: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.filename = filename
+
     def update_analyzer_progress(
         self,
         job_id: str,
@@ -110,6 +127,20 @@ class OrchestratorJobStore:
                     stage_total=stage_total,
                     frames_done=frames_done,
                     frames_total=frames_total,
+                )
+
+    def update_match_progress(
+        self,
+        job_id: str,
+        current_match: int,
+        total_matches: int,
+    ) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.match_progress = MatchProgress(
+                    current_match=current_match,
+                    total_matches=total_matches,
                 )
 
     def set_highlights(self, job_id: str, highlights: list[HighlightInfo]) -> None:
@@ -150,6 +181,7 @@ class OrchestratorJobStore:
             ]
             for jid in to_remove:
                 for path in [
+                    results_dir / f"{jid}.zip",
                     results_dir / f"{jid}.mp4",
                     results_dir / f"{jid}_analysis.json",
                 ]:
