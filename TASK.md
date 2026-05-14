@@ -29,4 +29,4 @@
 | 19 | 出現頻度ベースフィルタに置換（全データ統計で正常範囲を決定） | [analyzer#29](https://github.com/reisun/splatoon-battle-analyzer/pull/29) |
 | 20 | score_gain を未来ベースに変更、スコアリング係数を設定ファイル化 | [analyzer#30](https://github.com/reisun/splatoon-battle-analyzer/pull/30) |
 | 21 | マルチマッチ対応（マッチスキャンAPI） | [analyzer#61](https://github.com/reisun/splatoon-battle-analyzer/pull/61) |
-| 22 | マルチマッチ対応（パイプライン改修 + Web UI改修） | pilot#TBD |
+| 22 | マルチマッチ対応（パイプライン改修 + Web UI改修） | [pilot#30](https://github.com/reisun/splat-highlight-pilot/pull/30) |
