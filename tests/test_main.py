@@ -346,6 +346,83 @@ class TestMultiMatchPipeline:
         assert data["phase"] == "failed"
         assert "analyzer" in data["error"]
 
+    @respx.mock
+    def test_knockout_clamps_match_end(self, client, shared_dir):
+        """KO時に次の試合開始で match_end が切り詰められる."""
+        # 2試合: 1試合目は5分ルールだが180秒でKO→次の試合が180秒から開始
+        scan_job_id = "scan-ko-123"
+        respx.post(f"{ANALYZER_URL}/analyze/matches/scan/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": scan_job_id})
+        )
+        respx.get(f"{ANALYZER_URL}/analyze/matches/scan/jobs/{scan_job_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": scan_job_id,
+                    "status": "completed",
+                    "progress": {"frames_done": 10, "frames_total": 10},
+                    "result": {
+                        "matches": [
+                            {
+                                "start_seconds": 0.0,
+                                "duration_seconds": 300,
+                                "duration_type": "5min",
+                            },
+                            {
+                                "start_seconds": 180.0,
+                                "duration_seconds": 300,
+                                "duration_type": "5min",
+                            },
+                        ],
+                    },
+                    "error": None,
+                    "started_at": 1234567890.0,
+                },
+            )
+        )
+        _mock_highlight_responses()
+        mock_clip = AsyncMock(return_value=None)
+
+        captured_opts: list = []
+
+        async def capture_analyzer_call(job_id, file_path, opts):
+            captured_opts.append(opts)
+            result_data = AnalyzerResponse(
+                video="test.mp4",
+                model="test-model",
+                highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
+            )
+            return result_data
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            patch("app.main.clip_video_async", mock_clip),
+            patch(
+                "app.main._call_analyzer_background",
+                side_effect=capture_analyzer_call,
+            ),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
+
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        assert data["phase"] == "completed"
+        assert len(captured_opts) == 2
+        # 1試合目: min(0+300, 180) = 180
+        assert captured_opts[0].start == 0.0
+        assert captured_opts[0].end == 180.0
+        # 2試合目: 最後の試合なので 180+300 = 480
+        assert captured_opts[1].start == 180.0
+        assert captured_opts[1].end == 480.0
+
 
 class TestGetJobStatus:
     """GET /jobs/{job_id} のテスト."""

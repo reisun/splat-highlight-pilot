@@ -108,11 +108,12 @@ docker volume create shared-data
 5. マッチが検出されない場合はジョブを `failed` にして終了
 6. 検出されたマッチごとに以下を順次実行:
    a. フェーズを `analyzing` に設定、match_progress を更新（N/M）
-   b. analyzer の非同期ジョブAPI（`POST /analyze/highlights/jobs`）を `start`/`end` 付きで呼び出し
-   c. analyzer ジョブの完了をポーリングで待機
-   d. フェーズを `clipping` に設定
-   e. 内蔵 FFmpeg でハイライト区間をクリッピング・結合
-   f. 分析結果（analysis.json）を一時ディレクトリに保存
+   b. 試合終了時刻（end）の計算: `start + duration_seconds` を基本とし、次の試合がある場合は `min(start + duration_seconds, 次の試合の start_seconds)` に切り詰める（KO早期終了時に余分な映像を含めないため）
+   c. analyzer の非同期ジョブAPI（`POST /analyze/highlights/jobs`）を `start`/`end` 付きで呼び出し
+   d. analyzer ジョブの完了をポーリングで待機
+   e. フェーズを `clipping` に設定
+   f. 内蔵 FFmpeg でハイライト区間をクリッピング・結合
+   g. 分析結果（analysis.json）を一時ディレクトリに保存
 7. 全マッチの成果物を zip にまとめる（match_1/, match_2/, ...）
 8. フェーズを `completed` に設定、`download_url` を設定
 9. 一時ファイル（アップロード、マッチディレクトリ）を削除

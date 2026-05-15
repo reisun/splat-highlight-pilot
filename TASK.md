@@ -30,3 +30,4 @@
 | 20 | score_gain を未来ベースに変更、スコアリング係数を設定ファイル化 | [analyzer#30](https://github.com/reisun/splatoon-battle-analyzer/pull/30) |
 | 21 | マルチマッチ対応（マッチスキャンAPI） | [analyzer#61](https://github.com/reisun/splatoon-battle-analyzer/pull/61) |
 | 22 | マルチマッチ対応（パイプライン改修 + Web UI改修） | [pilot#30](https://github.com/reisun/splat-highlight-pilot/pull/30) |
+| 23 | 試合終了時刻のノックアウト対応 | TBD |
