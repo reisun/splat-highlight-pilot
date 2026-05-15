@@ -326,6 +326,10 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             match_start = match["start_seconds"]
             match_duration = match["duration_seconds"]
             match_end = match_start + match_duration
+            # KO（ノックアウト）対応: 次の試合がある場合、次の試合開始までに切り詰める
+            if i + 1 < total_matches:
+                next_start = matches[i + 1]["start_seconds"]
+                match_end = min(match_end, next_start)
 
             match_opts = AnalyzerOptions(
                 start=match_start,
