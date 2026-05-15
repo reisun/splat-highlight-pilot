@@ -131,10 +131,21 @@ class MatchBoundary(BaseModel):
     duration_type: str  # "5min" or "3min"
 
 
+class MatchScanTimerReading(BaseModel):
+    """analyzer の試合境界スキャンで取得した1フレームのタイマー読み取り結果."""
+
+    frame_timestamp: float
+    timer_seconds: float
+    total_duration: int
+    duration_type: str
+    match_start: float
+
+
 class MatchScanResult(BaseModel):
     """analyzer の /analyze/matches/scan/jobs 完了時の結果."""
 
     matches: list[MatchBoundary] = Field(default_factory=list)
+    readings: list[MatchScanTimerReading] = Field(default_factory=list)
 
 
 class MatchScanJobProgress(BaseModel):

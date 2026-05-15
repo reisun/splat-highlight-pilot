@@ -304,7 +304,9 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
     try:
         # --- Phase 1: Scanning ---
         orchestrator_jobs.set_phase(job_id, JobPhase.SCANNING)
-        matches = await _call_match_scan(job_id, str(upload_path))
+        scan_data = await _call_match_scan(job_id, str(upload_path))
+        matches = scan_data["matches"]
+        scan_readings = scan_data["readings"]
 
         if not matches:
             orchestrator_jobs.mark_failed(job_id, "No matches detected")
@@ -433,7 +435,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         # --- Phase 3: Build zip ---
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
         zip_path = results_dir / f"{job_id}.zip"
-        _build_zip(match_outputs, zip_path, match_infos)
+        _build_zip(match_outputs, zip_path, match_infos, scan_readings)
 
         # Collect all highlights for job store
         all_highlights = []
@@ -468,14 +470,19 @@ def _build_zip(
     match_outputs: list[dict],
     zip_path: Path,
     match_infos: list[dict] | None = None,
+    scan_readings: list[dict] | None = None,
 ) -> None:
     """試合ごとのハイライトと分析結果を zip にまとめる."""
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         if match_infos is not None:
+            matches_data = {
+                "matches": match_infos,
+                "scan_readings": scan_readings or [],
+            }
             zf.writestr(
                 "matches.json",
-                json.dumps(match_infos, ensure_ascii=False, indent=2),
+                json.dumps(matches_data, ensure_ascii=False, indent=2),
             )
 
         for mo in match_outputs:
@@ -494,9 +501,9 @@ def _build_zip(
 async def _call_match_scan(
     job_id: str,
     file_path: str,
-) -> list[dict]:
-    """analyzer の試合境界スキャンAPIを呼び出す."""
-    payload = {"file_path": file_path}
+) -> dict:
+    """analyzer の試合境界スキャンAPIを呼び出す.matches と readings を返す."""
+    payload = {"file_path": file_path, "interval": 20.0}
 
     async with _get_http_client() as client:
         try:
@@ -549,8 +556,12 @@ async def _call_match_scan(
 
             if scan_status.status == "completed":
                 if scan_status.result:
-                    return [m.model_dump() for m in scan_status.result.matches]
-                return []
+                    result = scan_status.result
+                    return {
+                        "matches": [m.model_dump() for m in result.matches],
+                        "readings": [r.model_dump() for r in result.readings],
+                    }
+                return {"matches": [], "readings": []}
 
             if scan_status.status == "failed":
                 msg = f"analyzer スキャンエラー: {scan_status.error}"

@@ -590,13 +590,15 @@ class TestBuildZip:
             assert "match_1/highlight.mp4" in names
             assert "match_1/analysis.json" in names
 
-            matches_data = json.loads(zf.read("matches.json"))
+            matches_json = json.loads(zf.read("matches.json"))
+            matches_data = matches_json["matches"]
             assert len(matches_data) == 1
             assert matches_data[0]["match_number"] == 1
             assert matches_data[0]["start_seconds"] == 0.0
             assert matches_data[0]["end_seconds"] == 300.0
             assert matches_data[0]["duration_type"] == "5min"
             assert matches_data[0]["knockout"] is False
+            assert "scan_readings" in matches_json
 
     def test_multiple_matches(self, tmp_path):
         """複数試合の zip 構造."""
@@ -645,7 +647,8 @@ class TestBuildZip:
             assert "match_2/highlight.mp4" in names
             assert "match_2/analysis.json" in names
 
-            matches_data = json.loads(zf.read("matches.json"))
+            matches_json = json.loads(zf.read("matches.json"))
+            matches_data = matches_json["matches"]
             assert len(matches_data) == 2
             assert matches_data[0]["match_number"] == 1
             assert matches_data[1]["match_number"] == 2
@@ -681,7 +684,8 @@ class TestBuildZip:
         _build_zip(match_outputs, zip_path, match_infos)
 
         with zipfile.ZipFile(zip_path, "r") as zf:
-            matches_data = json.loads(zf.read("matches.json"))
+            matches_json = json.loads(zf.read("matches.json"))
+            matches_data = matches_json["matches"]
             assert matches_data[0]["knockout"] is True
             assert matches_data[0]["end_seconds"] == 180.0
 
