@@ -319,6 +319,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         # --- Phase 2: Per-match analysis + clipping ---
         orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
         match_outputs: list[dict] = []
+        match_infos: list[dict] = []
 
         for i, match in enumerate(matches):
             orchestrator_jobs.update_match_progress(job_id, i + 1, total_matches)
@@ -330,6 +331,16 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             if i + 1 < total_matches:
                 next_start = matches[i + 1]["start_seconds"]
                 match_end = min(match_end, next_start)
+
+            match_infos.append(
+                {
+                    "match_number": i + 1,
+                    "start_seconds": match_start,
+                    "end_seconds": match_end,
+                    "duration_type": match.get("duration_type", "unknown"),
+                    "knockout": match_end < match_start + match_duration,
+                }
+            )
 
             match_opts = AnalyzerOptions(
                 start=match_start,
@@ -422,7 +433,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         # --- Phase 3: Build zip ---
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
         zip_path = results_dir / f"{job_id}.zip"
-        _build_zip(match_outputs, zip_path)
+        _build_zip(match_outputs, zip_path, match_infos)
 
         # Collect all highlights for job store
         all_highlights = []
@@ -453,10 +464,20 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         _cleanup_file(upload_path)
 
 
-def _build_zip(match_outputs: list[dict], zip_path: Path) -> None:
+def _build_zip(
+    match_outputs: list[dict],
+    zip_path: Path,
+    match_infos: list[dict] | None = None,
+) -> None:
     """試合ごとのハイライトと分析結果を zip にまとめる."""
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if match_infos is not None:
+            zf.writestr(
+                "matches.json",
+                json.dumps(match_infos, ensure_ascii=False, indent=2),
+            )
+
         for mo in match_outputs:
             match_idx = mo["match_index"]
             prefix = f"match_{match_idx}"

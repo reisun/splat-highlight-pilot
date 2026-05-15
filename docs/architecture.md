@@ -48,6 +48,7 @@ shared-data (Docker volume)
 zip 内構造:
 
 ```
+matches.json              <- 全試合の時間情報（match_number, start/end_seconds, duration_type, knockout）
 match_1/
   highlight.mp4
   analysis.json

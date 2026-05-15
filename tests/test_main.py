@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import zipfile
 from unittest.mock import AsyncMock, patch
@@ -569,15 +570,33 @@ class TestBuildZip:
                 "highlights": [],
             }
         ]
+        match_infos = [
+            {
+                "match_number": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 300.0,
+                "duration_type": "5min",
+                "knockout": False,
+            }
+        ]
 
         zip_path = tmp_path / "output.zip"
-        _build_zip(match_outputs, zip_path)
+        _build_zip(match_outputs, zip_path, match_infos)
 
         assert zip_path.exists()
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = zf.namelist()
+            assert "matches.json" in names
             assert "match_1/highlight.mp4" in names
             assert "match_1/analysis.json" in names
+
+            matches_data = json.loads(zf.read("matches.json"))
+            assert len(matches_data) == 1
+            assert matches_data[0]["match_number"] == 1
+            assert matches_data[0]["start_seconds"] == 0.0
+            assert matches_data[0]["end_seconds"] == 300.0
+            assert matches_data[0]["duration_type"] == "5min"
+            assert matches_data[0]["knockout"] is False
 
     def test_multiple_matches(self, tmp_path):
         """複数試合の zip 構造."""
@@ -598,15 +617,99 @@ class TestBuildZip:
                 }
             )
 
+        match_infos = [
+            {
+                "match_number": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 300.0,
+                "duration_type": "5min",
+                "knockout": False,
+            },
+            {
+                "match_number": 2,
+                "start_seconds": 320.0,
+                "end_seconds": 620.0,
+                "duration_type": "5min",
+                "knockout": False,
+            },
+        ]
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path, match_infos)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "matches.json" in names
+            assert "match_1/highlight.mp4" in names
+            assert "match_1/analysis.json" in names
+            assert "match_2/highlight.mp4" in names
+            assert "match_2/analysis.json" in names
+
+            matches_data = json.loads(zf.read("matches.json"))
+            assert len(matches_data) == 2
+            assert matches_data[0]["match_number"] == 1
+            assert matches_data[1]["match_number"] == 2
+
+    def test_matches_json_knockout(self, tmp_path):
+        """knockout=true: end_seconds < start + duration_seconds."""
+        match_dir = tmp_path / "match_1"
+        match_dir.mkdir()
+        highlight = match_dir / "highlight.mp4"
+        highlight.write_bytes(FAKE_MP4)
+        analysis = match_dir / "analysis.json"
+        analysis.write_text("{}", encoding="utf-8")
+
+        match_outputs = [
+            {
+                "match_index": 1,
+                "highlight_path": str(highlight),
+                "analysis_path": str(analysis),
+                "highlights": [],
+            }
+        ]
+        match_infos = [
+            {
+                "match_number": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 180.0,
+                "duration_type": "5min",
+                "knockout": True,
+            }
+        ]
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path, match_infos)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            matches_data = json.loads(zf.read("matches.json"))
+            assert matches_data[0]["knockout"] is True
+            assert matches_data[0]["end_seconds"] == 180.0
+
+    def test_without_match_infos(self, tmp_path):
+        """match_infos なしでも後方互換で動作する."""
+        match_dir = tmp_path / "match_1"
+        match_dir.mkdir()
+        highlight = match_dir / "highlight.mp4"
+        highlight.write_bytes(FAKE_MP4)
+        analysis = match_dir / "analysis.json"
+        analysis.write_text("{}", encoding="utf-8")
+
+        match_outputs = [
+            {
+                "match_index": 1,
+                "highlight_path": str(highlight),
+                "analysis_path": str(analysis),
+                "highlights": [],
+            }
+        ]
+
         zip_path = tmp_path / "output.zip"
         _build_zip(match_outputs, zip_path)
 
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = zf.namelist()
+            assert "matches.json" not in names
             assert "match_1/highlight.mp4" in names
-            assert "match_1/analysis.json" in names
-            assert "match_2/highlight.mp4" in names
-            assert "match_2/analysis.json" in names
 
 
 class TestCleanup:
