@@ -32,7 +32,7 @@ addopts = "--ruff --ruff-format"
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-exclude = ["test_data"]
+exclude = ["test_data", "e2e_tests"]
 
 [tool.ruff.lint]
 select = [

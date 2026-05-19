@@ -35,6 +35,7 @@ class AnalyzerOptions(BaseModel):
     threshold: int = 100
     model: str | None = None
     concurrency: int = 4
+    duration_type: str | None = None
 
 
 class AnalyzerFrameResult(BaseModel):

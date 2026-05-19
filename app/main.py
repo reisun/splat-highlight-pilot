@@ -351,6 +351,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 threshold=opts.threshold,
                 model=opts.model,
                 concurrency=opts.concurrency,
+                duration_type=match.get("duration_type"),
             )
 
             analyzer_result = await _call_analyzer_background(
