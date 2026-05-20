@@ -42,10 +42,10 @@ class AnalyzerFrameResult(BaseModel):
     """analyzer レスポンス内のフレーム解析結果."""
 
     timestamp_seconds: float
-    score: int = 0
-    score_kills: int = 0
+    score: float = 0.0
+    score_kills: float = 0.0
     score_count_gain: float = 0.0
-    score_dead: int = 0
+    score_dead: float = 0.0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
     kills: int = 0
@@ -53,6 +53,7 @@ class AnalyzerFrameResult(BaseModel):
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
     enemy_score_gain: float = 0.0
+    has_count_rail: bool | None = None
 
 
 class AnalyzerHighlight(BaseModel):
@@ -186,10 +187,10 @@ class OrchestratorFrameInfo(BaseModel):
     """フレーム解析結果."""
 
     timestamp_seconds: float
-    score: int = 0
-    score_kills: int = 0
+    score: float = 0.0
+    score_kills: float = 0.0
     score_count_gain: float = 0.0
-    score_dead: int = 0
+    score_dead: float = 0.0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
     kills: int = 0
@@ -197,6 +198,7 @@ class OrchestratorFrameInfo(BaseModel):
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
     enemy_score_gain: float = 0.0
+    has_count_rail: bool | None = None
 
 
 class OrchestratorHighlightInfo(BaseModel):

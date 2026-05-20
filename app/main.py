@@ -294,7 +294,7 @@ def _flatten_clipped_scores(
     for frame in frames:
         for h in highlights:
             if h.start_seconds <= frame.timestamp_seconds <= h.end_seconds:
-                frame.score = 0
+                frame.score = 0.0
                 frame.score_count_gain = 0.0
                 frame.enemy_score_gain = 0.0
                 break
