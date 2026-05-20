@@ -44,7 +44,7 @@ class AnalyzerFrameResult(BaseModel):
     timestamp_seconds: float
     score: int = 0
     score_kills: int = 0
-    score_count_gain: int = 0
+    score_count_gain: float = 0.0
     score_dead: int = 0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
@@ -52,6 +52,7 @@ class AnalyzerFrameResult(BaseModel):
     is_dead: bool = False
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
+    enemy_score_gain: float = 0.0
 
 
 class AnalyzerHighlight(BaseModel):
@@ -187,7 +188,7 @@ class OrchestratorFrameInfo(BaseModel):
     timestamp_seconds: float
     score: int = 0
     score_kills: int = 0
-    score_count_gain: int = 0
+    score_count_gain: float = 0.0
     score_dead: int = 0
     my_team_count: int | None = None
     enemy_team_count: int | None = None
@@ -195,6 +196,7 @@ class OrchestratorFrameInfo(BaseModel):
     is_dead: bool = False
     my_team_count_raw: int | None = None
     enemy_team_count_raw: int | None = None
+    enemy_score_gain: float = 0.0
 
 
 class OrchestratorHighlightInfo(BaseModel):
