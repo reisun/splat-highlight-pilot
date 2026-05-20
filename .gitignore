@@ -32,3 +32,5 @@ Thumbs.db
 htmlcov/
 .coverage
 e2e_tests/results
+e2e_tests/data/*
+!e2e_tests/data/*.gitkeep
