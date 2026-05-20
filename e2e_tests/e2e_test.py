@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 import sys
 import time
 import zipfile
@@ -20,31 +21,31 @@ RESULTS_DIR = Path(__file__).parent / "results"
 
 TEST_CASES = [
     {
-        "file": "yagura5m_normal_1-match.mp4",
+        "file": "data/yagura5m_normal_1-match.mp4",
         "expected_matches": 1,
         "expected_rules": ["5min"],
         "description": "ガチヤグラ 1試合（通常終了）",
     },
     {
-        "file": "asari5m_normal_1-match.mp4",
+        "file": "data/asari5m_normal_1-match.mp4",
         "expected_matches": 1,
         "expected_rules": ["5min"],
         "description": "ガチアサリ 1試合（通常終了）",
     },
     {
-        "file": "area5m_knockout_normal_2-match.mp4",
+        "file": "data/area5m_knockout_normal_2-match.mp4",
         "expected_matches": 2,
         "expected_rules": ["5min", "5min"],
         "description": "ガチエリア 2試合（KO+通常混合）",
     },
     {
-        "file": "nawabari_multi_2-match.mp4",
+        "file": "data/nawabari_multi_2-match.mp4",
         "expected_matches": 2,
         "expected_rules": ["3min", "3min"],
         "description": "ナワバリ 2試合",
     },
     {
-        "file": "5m_3m_5m_3-match.mp4",
+        "file": "data/5m_3m_5m_3-match.mp4",
         "expected_matches": 3,
         "expected_rules": ["5min", "3min", "5min"],
         "description": "混合（ガチ+ナワバリ） 3試合",
@@ -223,6 +224,8 @@ async def main() -> None:
     else:
         cases = TEST_CASES
 
+    if RESULTS_DIR.exists():
+        shutil.rmtree(RESULTS_DIR)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     total_start = time.time()
     results = []

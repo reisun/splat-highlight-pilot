@@ -31,3 +31,4 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+e2e_tests/results
