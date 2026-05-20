@@ -16,22 +16,6 @@
 - 原因: ナワバリのタイマー最大値は180sだが、Visionが画面上の別の数値（ポイント表示等）を誤読している可能性
 - 対策案: タイマー読み取りプロンプトの改善、または180s超のタイマー値に対する補正ロジック
 
-### トークン消費量削減
-
-| # | タスク | 状態 |
-|---|--------|------|
-| T1a | 上半分クロップ縮小（上部30%に） | 実装済み・未PR |
-| T1b | 下半分クロップ縮小（下部30%に） | 実装済み・未PR |
-| T2 | 2パス方式（粗スキャン→密スキャン） | 実装済み・未PR |
-
-### ハイライト分析の品質改善
-
-| # | タスク | 状態 |
-|---|--------|------|
-| Q1 | PAV正規化の改善（急降下追従） | 実装済み・未PR |
-| Q2 | ナワバリ時の上半分スキップ | 実装済み・未PR |
-| Q3 | ヤグラ/ホコ向けプロンプト改善（カウントバー進行方向） | 実装済み・未PR |
-
 ## 完了タスク
 
 | # | タスク | PR |
@@ -60,3 +44,10 @@
 | 22 | マルチマッチ対応（パイプライン改修 + Web UI改修） | [pilot#30](https://github.com/reisun/splat-highlight-pilot/pull/30) |
 | 23 | 試合終了時刻のノックアウト対応 | [pilot#32](https://github.com/reisun/splat-highlight-pilot/pull/32) |
 | 24 | zip に matches.json を追加 | [pilot#34](https://github.com/reisun/splat-highlight-pilot/pull/34) |
+| 25 | 上半分クロップ縮小（上部30%に） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 26 | 下半分クロップ縮小（下部30%に） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 27 | 2パス方式（粗スキャン→密スキャン） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 28 | PAV正規化の改善（急降下追従） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 29 | ナワバリ時の上半分スキップ | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64), [pilot#38](https://github.com/reisun/splat-highlight-pilot/pull/38) |
+| 30 | ヤグラ/ホコ向けプロンプト改善（カウントバー進行方向） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 31 | フレーム1/2リサイズによるトークン削減 | [analyzer#65](https://github.com/reisun/splatoon-battle-analyzer/pull/65) |
