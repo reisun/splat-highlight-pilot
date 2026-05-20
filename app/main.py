@@ -308,6 +308,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         scan_data = await _call_match_scan(job_id, str(upload_path))
         matches = scan_data["matches"]
         scan_readings = scan_data["readings"]
+        scan_job_id = scan_data.get("scan_job_id")
 
         if not matches:
             orchestrator_jobs.mark_failed(job_id, "No matches detected")
@@ -353,6 +354,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 model=opts.model,
                 concurrency=opts.concurrency,
                 duration_type=match.get("duration_type"),
+                scan_job_id=scan_job_id,
             )
 
             analyzer_result = await _call_analyzer_background(
@@ -376,6 +378,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 "match_start_seconds": match_start,
                 "match_duration_seconds": match_duration,
                 "match_duration_type": match.get("duration_type", "unknown"),
+                "scan_summary": analyzer_result.scan_summary,
                 "highlights": [
                     {
                         "start_seconds": h.start_seconds,
@@ -386,7 +389,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 ],
                 "scoring": analyzer_result.scoring.model_dump(),
                 "frames": [f.model_dump() for f in all_frames],
-                "scan_summary": analyzer_result.scan_summary,
             }
 
             _flatten_clipped_scores(all_frames, highlights)
@@ -505,7 +507,7 @@ async def _call_match_scan(
     file_path: str,
 ) -> dict:
     """analyzer の試合境界スキャンAPIを呼び出す.matches と readings を返す."""
-    payload = {"file_path": file_path, "interval": 20.0}
+    payload = {"file_path": file_path, "interval": 30.0}
 
     async with _get_http_client() as client:
         try:
@@ -562,8 +564,9 @@ async def _call_match_scan(
                     return {
                         "matches": [m.model_dump() for m in result.matches],
                         "readings": [r.model_dump() for r in result.readings],
+                        "scan_job_id": scan_job_id,
                     }
-                return {"matches": [], "readings": []}
+                return {"matches": [], "readings": [], "scan_job_id": scan_job_id}
 
             if scan_status.status == "failed":
                 msg = f"analyzer スキャンエラー: {scan_status.error}"
