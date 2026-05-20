@@ -52,3 +52,5 @@
 | 30 | ヤグラ/ホコ向けプロンプト改善（カウントバー進行方向） | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
 | 31 | フレーム1/2リサイズによるトークン削減 | [analyzer#65](https://github.com/reisun/splatoon-battle-analyzer/pull/65) |
 | 32 | Phase A/B専用フロー（上半分15秒→下半分5秒gain>1区間） | [analyzer#66](https://github.com/reisun/splatoon-battle-analyzer/pull/66), [pilot#40](https://github.com/reisun/splat-highlight-pilot/pull/40) |
+| 33 | score関連フィールドの全float化 | [analyzer#67](https://github.com/reisun/splatoon-battle-analyzer/pull/67), [pilot#42](https://github.com/reisun/splat-highlight-pilot/pull/42) |
+| 34 | ヤグラ・ホコ向けレール検出によるゲームカウント入れ替え | [analyzer#67](https://github.com/reisun/splatoon-battle-analyzer/pull/67), [pilot#42](https://github.com/reisun/splat-highlight-pilot/pull/42) |
