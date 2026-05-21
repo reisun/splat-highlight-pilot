@@ -70,8 +70,7 @@ async def _periodic_cleanup() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         try:
-            results_dir = SHARED_DATA_DIR / "results"
-            orchestrator_jobs.cleanup_old(results_dir, CLEANUP_MAX_AGE)
+            orchestrator_jobs.cleanup_old(SHARED_DATA_DIR, CLEANUP_MAX_AGE)
         except Exception:  # noqa: BLE001
             logger.exception("クリーンアップ中にエラー")
 
