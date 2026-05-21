@@ -36,6 +36,7 @@ class AnalyzerOptions(BaseModel):
     model: str | None = None
     concurrency: int = 4
     duration_type: str | None = None
+    scan_job_id: str | None = None
 
 
 class AnalyzerFrameResult(BaseModel):
@@ -144,11 +145,21 @@ class MatchScanTimerReading(BaseModel):
     match_start: float
 
 
+class ScanFrameAnalysis(BaseModel):
+    """scan時に取得したフレーム分析データ（タイマー+ゲームカウント）."""
+
+    frame_timestamp: float
+    my_team_count: int | None = None
+    enemy_team_count: int | None = None
+    has_count_rail: bool = False
+
+
 class MatchScanResult(BaseModel):
     """analyzer の /analyze/matches/scan/jobs 完了時の結果."""
 
     matches: list[MatchBoundary] = Field(default_factory=list)
     readings: list[MatchScanTimerReading] = Field(default_factory=list)
+    frame_analyses: list[ScanFrameAnalysis] = Field(default_factory=list)
 
 
 class MatchScanJobProgress(BaseModel):
