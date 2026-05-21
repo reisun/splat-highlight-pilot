@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import zipfile
 from unittest.mock import AsyncMock, patch
@@ -719,6 +720,11 @@ class TestBuildZip:
 class TestCleanup:
     """自動クリーンアップのテスト."""
 
+    def _make_old(self, path, age=7200):
+        """ファイル/ディレクトリのmtimeを古くする."""
+        old_time = time.time() - age
+        os.utime(path, (old_time, old_time))
+
     def test_cleanup_removes_old_jobs_and_files(self, shared_dir):
         """期限切れジョブとファイルが削除される."""
         results_dir = shared_dir / "results"
@@ -731,10 +737,11 @@ class TestCleanup:
 
         zip_file = results_dir / f"{job.job_id}.zip"
         zip_file.write_bytes(FAKE_ZIP)
+        self._make_old(zip_file)
 
-        removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
+        removed = orchestrator_jobs.cleanup_old(shared_dir, max_age_seconds=3600)
 
-        assert removed == 1
+        assert removed >= 1
         assert orchestrator_jobs.get(job.job_id) is None
         assert not zip_file.exists()
 
@@ -749,11 +756,58 @@ class TestCleanup:
         zip_file = results_dir / f"{job.job_id}.zip"
         zip_file.write_bytes(FAKE_ZIP)
 
-        removed = orchestrator_jobs.cleanup_old(results_dir, max_age_seconds=3600)
+        removed = orchestrator_jobs.cleanup_old(shared_dir, max_age_seconds=3600)
 
         assert removed == 0
         assert orchestrator_jobs.get(job.job_id) is not None
         assert zip_file.exists()
+
+    def test_cleanup_removes_old_uploads(self, shared_dir):
+        """古いアップロードファイルが削除される."""
+        uploads_dir = shared_dir / "uploads"
+        uploads_dir.mkdir()
+
+        old_file = uploads_dir / "old_video.mp4"
+        old_file.write_bytes(b"video data")
+        self._make_old(old_file)
+
+        new_file = uploads_dir / "new_video.mp4"
+        new_file.write_bytes(b"video data")
+
+        orchestrator_jobs.cleanup_old(shared_dir, max_age_seconds=3600)
+
+        assert not old_file.exists()
+        assert new_file.exists()
+
+    def test_cleanup_removes_old_tmp(self, shared_dir):
+        """古いtmpファイルが削除される."""
+        tmp_dir = shared_dir / "tmp"
+        tmp_dir.mkdir()
+
+        old_file = tmp_dir / "frame.jpg"
+        old_file.write_bytes(b"jpeg data")
+        self._make_old(old_file)
+
+        removed = orchestrator_jobs.cleanup_old(shared_dir, max_age_seconds=3600)
+
+        assert removed >= 1
+        assert not old_file.exists()
+
+    def test_cleanup_removes_old_result_directories(self, shared_dir):
+        """古い結果ディレクトリ構造が削除される."""
+        results_dir = shared_dir / "results"
+        results_dir.mkdir()
+
+        match_dir = results_dir / "abc123_match_1"
+        match_dir.mkdir()
+        (match_dir / "analysis.json").write_text("{}")
+        (match_dir / "highlight.mp4").write_bytes(b"mp4")
+        self._make_old(match_dir)
+
+        removed = orchestrator_jobs.cleanup_old(shared_dir, max_age_seconds=3600)
+
+        assert removed >= 1
+        assert not match_dir.exists()
 
 
 class TestFlattenClippedScores:

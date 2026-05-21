@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 import uuid
@@ -167,11 +168,23 @@ class OrchestratorJobStore:
 
     def cleanup_old(
         self,
-        results_dir: Path,
+        shared_data_dir: Path,
         max_age_seconds: float = 3600,
     ) -> int:
-        """期限切れジョブとその関連ファイルを削除する."""
+        """期限切れジョブとmtimeベースで古いファイルを削除する."""
         now = time.time()
+        removed_jobs = self._cleanup_expired_jobs(max_age_seconds, now)
+        removed_files = _cleanup_old_files(shared_data_dir, max_age_seconds, now)
+        total = removed_jobs + removed_files
+        if total:
+            logger.info(
+                "クリーンアップ完了: ジョブ%d件, ファイル%d件削除",
+                removed_jobs,
+                removed_files,
+            )
+        return total
+
+    def _cleanup_expired_jobs(self, max_age_seconds: float, now: float) -> int:
         removed = 0
         with self._lock:
             to_remove = [
@@ -180,17 +193,32 @@ class OrchestratorJobStore:
                 if j.completed_at and (now - j.completed_at) > max_age_seconds
             ]
             for jid in to_remove:
-                for path in [
-                    results_dir / f"{jid}.zip",
-                    results_dir / f"{jid}.mp4",
-                    results_dir / f"{jid}_analysis.json",
-                ]:
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError:
-                        logger.warning("ファイル削除失敗: %s", path)
                 del self._jobs[jid]
                 removed += 1
-        if removed:
-            logger.info("クリーンアップ完了: %d件のジョブを削除", removed)
         return removed
+
+
+def _cleanup_old_files(
+    shared_data_dir: Path,
+    max_age_seconds: float,
+    now: float,
+) -> int:
+    """shared_data_dir配下のuploads/results/tmpから古いファイルを削除する."""
+    removed = 0
+    for subdir in ("results", "uploads", "tmp"):
+        target = shared_data_dir / subdir
+        if not target.is_dir():
+            continue
+        for entry in list(target.iterdir()):
+            try:
+                mtime = entry.stat().st_mtime
+                if (now - mtime) <= max_age_seconds:
+                    continue
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+                removed += 1
+            except OSError:
+                logger.warning("ファイル削除失敗: %s", entry)
+    return removed
