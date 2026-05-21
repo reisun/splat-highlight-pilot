@@ -9,11 +9,13 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+import os
+
 import httpx
 import websockets
 
-BASE_URL = "http://localhost:8030"
-WS_URL = "ws://localhost:8030/ws/upload"
+BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:8030")
+WS_URL = os.environ.get("E2E_WS_URL", BASE_URL.replace("http", "ws") + "/ws/upload")
 POLL_INTERVAL = 5
 CHUNK_SIZE = 64 * 1024
 
@@ -37,6 +39,12 @@ TEST_CASES = [
         "expected_matches": 2,
         "expected_rules": ["5min", "5min"],
         "description": "ガチエリア 2試合（KO+通常混合）",
+    },
+    {
+        "file": "data/hoko5m_normal_1-match.mkv",
+        "expected_matches": 1,
+        "expected_rules": ["5min"],
+        "description": "ガチホコ 1試合（通常終了）",
     },
     {
         "file": "data/nawabari_multi_2-match.mp4",
@@ -224,9 +232,12 @@ async def main() -> None:
     else:
         cases = TEST_CASES
 
-    if RESULTS_DIR.exists():
-        shutil.rmtree(RESULTS_DIR)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    for case in cases:
+        case_name = Path(case["file"]).stem
+        case_dir = RESULTS_DIR / case_name
+        if case_dir.exists():
+            shutil.rmtree(case_dir)
     total_start = time.time()
     results = []
 
