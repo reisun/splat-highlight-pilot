@@ -37,6 +37,7 @@ class AnalyzerOptions(BaseModel):
     concurrency: int = 4
     duration_type: str | None = None
     scan_job_id: str | None = None
+    weights: dict[str, float] | None = None
 
 
 class AnalyzerFrameResult(BaseModel):

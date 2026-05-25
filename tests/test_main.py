@@ -204,6 +204,53 @@ class TestWebSocketUpload:
         assert job is not None
         assert job.filename == "test.mp4"
 
+    def test_upload_with_weights_option(self, client):
+        """オプションの weights がパイプラインに渡される."""
+        captured_opts: list = []
+
+        async def mock_pipeline(job_id, upload_path, opts):
+            captured_opts.append(opts)
+
+        with (
+            patch("app.main._run_pipeline", mock_pipeline),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            video_data = b"fake-video-data"
+            ws.send_json(
+                {
+                    "type": "start",
+                    "filename": "test.mp4",
+                    "size": len(video_data),
+                    "options": {
+                        "weights": {"score_count_gain": 0},
+                    },
+                }
+            )
+            ws.send_bytes(video_data)
+            ws.receive_json()  # progress
+            ws.send_json({"type": "upload_complete"})
+            ws.receive_json()  # job_created
+
+        assert len(captured_opts) == 1
+        assert captured_opts[0].weights == {"score_count_gain": 0}
+
+    def test_upload_without_options(self, client):
+        """オプションなしの場合 weights が None になる."""
+        captured_opts: list = []
+
+        async def mock_pipeline(job_id, upload_path, opts):
+            captured_opts.append(opts)
+
+        with (
+            patch("app.main._run_pipeline", mock_pipeline),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            _send_upload(ws)
+            ws.receive_json()  # job_created
+
+        assert len(captured_opts) == 1
+        assert captured_opts[0].weights is None
+
     def test_invalid_start_message(self, client):
         """start 以外のメッセージでエラーになる."""
         with client.websocket_connect("/ws/upload") as ws:
@@ -347,6 +394,59 @@ class TestMultiMatchPipeline:
 
         assert data["phase"] == "failed"
         assert "analyzer" in data["error"]
+
+    @respx.mock
+    def test_weights_forwarded_to_analyzer(self, client, shared_dir):
+        """weights が analyzer 呼び出しに渡される."""
+        _mock_scan_responses()
+        mock_clip = AsyncMock(return_value=None)
+
+        captured_opts: list = []
+
+        async def capture_analyzer_call(job_id, file_path, opts):
+            captured_opts.append(opts)
+            return AnalyzerResponse(
+                video="test.mp4",
+                model="test-model",
+                highlights=[h.model_dump() for h in SAMPLE_HIGHLIGHTS],
+            )
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            patch("app.main.clip_video_async", mock_clip),
+            patch(
+                "app.main._call_analyzer_background",
+                side_effect=capture_analyzer_call,
+            ),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            video_data = b"fake-video-data"
+            ws.send_json(
+                {
+                    "type": "start",
+                    "filename": "test.mp4",
+                    "size": len(video_data),
+                    "options": {
+                        "weights": {"score_count_gain": 0},
+                    },
+                }
+            )
+            ws.send_bytes(video_data)
+            ws.receive_json()  # progress
+            ws.send_json({"type": "upload_complete"})
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
+
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        assert data["phase"] == "completed"
+        assert len(captured_opts) == 1
+        assert captured_opts[0].weights == {"score_count_gain": 0}
 
     @respx.mock
     def test_knockout_clamps_match_end(self, client, shared_dir):

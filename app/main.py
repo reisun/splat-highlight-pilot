@@ -221,6 +221,8 @@ async def ws_upload(websocket: WebSocket) -> None:
 
         filename = start_msg.get("filename", "video.mp4")
         total_size = start_msg.get("size", 0)
+        options_raw = start_msg.get("options") or {}
+        opts = AnalyzerOptions(**options_raw)
 
         job = orchestrator_jobs.create()
         job_id = job.job_id
@@ -264,7 +266,7 @@ async def ws_upload(websocket: WebSocket) -> None:
 
         orchestrator_jobs.set_upload_path(job_id, str(upload_path))
         asyncio.create_task(  # noqa: RUF006
-            _run_pipeline(job_id, upload_path, AnalyzerOptions())
+            _run_pipeline(job_id, upload_path, opts)
         )
 
         await websocket.send_json({"type": "job_created", "job_id": job_id})
@@ -354,6 +356,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 concurrency=opts.concurrency,
                 duration_type=match.get("duration_type"),
                 scan_job_id=scan_job_id,
+                weights=opts.weights,
             )
 
             analyzer_result = await _call_analyzer_background(

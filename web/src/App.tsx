@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import Header from "./components/Header";
 import DropZone from "./components/DropZone";
+import OptionsPanel from "./components/OptionsPanel";
 import Processing from "./components/Processing";
 import ResultView from "./components/ResultView";
 import ErrorMessage from "./components/ErrorMessage";
-import { createHighlight, resumeJob, getPendingJobId, clearPendingJob, type ProgressUpdate, type AnalyzerDetail, type MatchDetail } from "./api";
+import { createHighlight, resumeJob, getPendingJobId, clearPendingJob, type ProgressUpdate, type AnalyzerDetail, type MatchDetail, type HighlightOptions } from "./api";
 
 type AppState =
   | { phase: "idle" }
@@ -17,6 +18,7 @@ type AppState =
 
 export default function App() {
   const [state, setState] = useState<AppState>({ phase: "idle" });
+  const [spectatorMode, setSpectatorMode] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -58,6 +60,10 @@ export default function App() {
 
     setState({ phase: "uploading", fileName: file.name, percent: 0 });
 
+    const options: HighlightOptions | undefined = spectatorMode
+      ? { weights: { score_count_gain: 0 } }
+      : undefined;
+
     const { cancel } = createHighlight(file, (update: ProgressUpdate) => {
       switch (update.phase) {
         case "uploading":
@@ -88,10 +94,10 @@ export default function App() {
           });
           break;
       }
-    });
+    }, options);
 
     cancelRef.current = cancel;
-  }, []);
+  }, [spectatorMode]);
 
   const handleReset = useCallback(() => {
     if (cancelRef.current) {
@@ -113,7 +119,14 @@ export default function App() {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-8">
         {state.phase === "idle" && (
-          <DropZone onFileSelected={handleFileSelected} disabled={false} />
+          <>
+            <DropZone onFileSelected={handleFileSelected} disabled={false} />
+            <OptionsPanel
+              spectatorMode={spectatorMode}
+              onSpectatorModeChange={setSpectatorMode}
+              disabled={false}
+            />
+          </>
         )}
         {(state.phase === "uploading" ||
           state.phase === "scanning" ||
