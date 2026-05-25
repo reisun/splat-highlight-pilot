@@ -31,6 +31,10 @@ export interface ProgressUpdate {
   jobId?: string;
 }
 
+export interface HighlightOptions {
+  weights?: Record<string, number>;
+}
+
 const CHUNK_SIZE = 1024 * 1024;
 const STORAGE_KEY = "splat-highlight-job-id";
 
@@ -118,18 +122,21 @@ export function resumeJob(
 export function createHighlight(
   file: File,
   onProgress: (update: ProgressUpdate) => void,
+  options?: HighlightOptions,
 ): { cancel: () => void } {
   const ws = new WebSocket(`${wsUrl()}/ws/upload`);
   let pollCancel: (() => void) | null = null;
 
   ws.onopen = () => {
-    ws.send(
-      JSON.stringify({
-        type: "start",
-        filename: file.name,
-        size: file.size,
-      }),
-    );
+    const startMsg: Record<string, unknown> = {
+      type: "start",
+      filename: file.name,
+      size: file.size,
+    };
+    if (options) {
+      startMsg.options = options;
+    }
+    ws.send(JSON.stringify(startMsg));
 
     let offset = 0;
     const sendNext = () => {
