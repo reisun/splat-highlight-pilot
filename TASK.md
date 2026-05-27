@@ -2,19 +2,7 @@
 
 ## 未対応タスク
 
-### BUG: 試合境界スキャンの精度問題（2件）
-
-**BUG-1: 1フレーム孤立クラスタによる偽試合検出**
-- 再現: エリア2試合動画 (`area5m_knockout_normal_2-match.mp4`)、混合3試合動画 (`5m_3m_5m_3-match.mp4`)
-- 症状: 1フレームだけ他と離れたmatch_startが計算され、偽の試合として検出される
-- 例: ts=40sで`timer=250s`→match_start=-10s、他フレーム群はmatch_start=45s。30s超離れるため別クラスタに
-- 対策案: `cluster_readings`で最小フレーム数フィルタ（2フレーム未満のクラスタを除外）
-
-**BUG-2: ナワバリ試合のタイマー誤読による5min誤判定**
-- 再現: ナワバリ2試合動画 (`nawabari_multi_2-match.mp4`)
-- 症状: match_1のタイマーが204s, 173sなど180超で読み取られ、5minルールと誤判定される
-- 原因: ナワバリのタイマー最大値は180sだが、Visionが画面上の別の数値（ポイント表示等）を誤読している可能性
-- 対策案: タイマー読み取りプロンプトの改善、または180s超のタイマー値に対する補正ロジック
+なし
 
 ## 完了タスク
 
@@ -54,3 +42,6 @@
 | 32 | Phase A/B専用フロー（上半分15秒→下半分5秒gain>1区間） | [analyzer#66](https://github.com/reisun/splatoon-battle-analyzer/pull/66), [pilot#40](https://github.com/reisun/splat-highlight-pilot/pull/40) |
 | 33 | score関連フィールドの全float化 | [analyzer#67](https://github.com/reisun/splatoon-battle-analyzer/pull/67), [pilot#42](https://github.com/reisun/splat-highlight-pilot/pull/42) |
 | 34 | ヤグラ・ホコ向けレール検出によるゲームカウント入れ替え | [analyzer#67](https://github.com/reisun/splatoon-battle-analyzer/pull/67), [pilot#42](https://github.com/reisun/splat-highlight-pilot/pull/42) |
+| 35 | BUG-1: 1フレーム孤立クラスタによる偽試合検出の修正 | [analyzer#61](https://github.com/reisun/splatoon-battle-analyzer/pull/61) |
+| 36 | BUG-2: ナワバリ試合のタイマー誤読による5min誤判定の修正 | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
+| 37 | weights パラメータ反映と Phase B マージのカウント上書き防止 | [analyzer#76](https://github.com/reisun/splatoon-battle-analyzer/pull/76) |
