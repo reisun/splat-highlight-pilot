@@ -45,3 +45,4 @@
 | 35 | BUG-1: 1フレーム孤立クラスタによる偽試合検出の修正 | [analyzer#61](https://github.com/reisun/splatoon-battle-analyzer/pull/61) |
 | 36 | BUG-2: ナワバリ試合のタイマー誤読による5min誤判定の修正 | [analyzer#64](https://github.com/reisun/splatoon-battle-analyzer/pull/64) |
 | 37 | weights パラメータ反映と Phase B マージのカウント上書き防止 | [analyzer#76](https://github.com/reisun/splatoon-battle-analyzer/pull/76) |
+| 38 | WebUI日本語化とハイライト作成開始ボタン追加 | [pilot#52](https://github.com/reisun/splat-highlight-pilot/pull/52) |
