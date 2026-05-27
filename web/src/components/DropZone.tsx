@@ -3,9 +3,10 @@ import { useCallback, useState, useRef } from "react";
 interface DropZoneProps {
   onFileSelected: (file: File) => void;
   disabled: boolean;
+  selectedFileName?: string;
 }
 
-export default function DropZone({ onFileSelected, disabled }: DropZoneProps) {
+export default function DropZone({ onFileSelected, disabled, selectedFileName }: DropZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -67,25 +68,49 @@ export default function DropZone({ onFileSelected, disabled }: DropZoneProps) {
         disabled={disabled}
       />
       <div className="text-gray-600">
-        <svg
-          className="mx-auto h-12 w-12 mb-4 text-gray-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-          />
-        </svg>
-        <p className="text-lg font-medium">
-          Drop a video file here, or click to select
-        </p>
-        <p className="text-sm text-gray-500 mt-1">
-          Supported formats: MP4, MOV, AVI, etc.
-        </p>
+        {selectedFileName ? (
+          <>
+            <svg
+              className="mx-auto h-12 w-12 mb-4 text-green-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            <p className="text-lg font-medium text-gray-700">{selectedFileName}</p>
+            <p className="text-sm text-gray-500 mt-1">
+              クリックまたはドロップで変更できます
+            </p>
+          </>
+        ) : (
+          <>
+            <svg
+              className="mx-auto h-12 w-12 mb-4 text-gray-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+              />
+            </svg>
+            <p className="text-lg font-medium">
+              動画ファイルをドロップ、またはクリックして選択
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              対応形式: MP4, MOV, AVI など
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

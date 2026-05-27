@@ -28,7 +28,7 @@ export default function Processing({ phase, fileName, percent, analyzerDetail, m
             />
           </div>
           <p className="text-lg font-medium text-gray-700">
-            Uploading video... {percent ?? 0}%
+            動画をアップロード中... {percent ?? 0}%
           </p>
         </>
       ) : (
@@ -37,36 +37,36 @@ export default function Processing({ phase, fileName, percent, analyzerDetail, m
           {phase === "scanning" ? (
             <>
               <p className="text-lg font-medium text-gray-700">
-                Scanning for matches...
+                試合をスキャン中...
               </p>
               {analyzerDetail && analyzerDetail.frames_total > 0 && (
                 <p className="text-sm text-gray-500 mt-1">
-                  Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
+                  フレーム {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
                 </p>
               )}
             </>
           ) : phase === "analyzing" && analyzerDetail ? (
             <>
               <p className="text-lg font-medium text-gray-700">
-                Analyzing...
+                分析中...
                 {matchDetail && matchDetail.total_matches > 0 && (
-                  <span className="text-base"> (Match {matchDetail.current_match}/{matchDetail.total_matches})</span>
+                  <span className="text-base"> (試合 {matchDetail.current_match}/{matchDetail.total_matches})</span>
                 )}
               </p>
               <p className="text-sm text-gray-500 mt-1">
-                Frame {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
+                フレーム {analyzerDetail.frames_done}/{analyzerDetail.frames_total}
                 {analyzerDetail.started_at && (
-                  <span className="ml-2">({formatElapsed(analyzerDetail.started_at)} elapsed)</span>
+                  <span className="ml-2">(経過 {formatElapsed(analyzerDetail.started_at)})</span>
                 )}
               </p>
             </>
           ) : (
             <p className="text-lg font-medium text-gray-700">
               {phase === "analyzing"
-                ? "Detecting highlights..."
-                : "Creating highlight clip..."}
+                ? "ハイライト検出中..."
+                : "ハイライトクリップを作成中..."}
               {matchDetail && matchDetail.total_matches > 0 && (
-                <span className="text-base"> (Match {matchDetail.current_match}/{matchDetail.total_matches})</span>
+                <span className="text-base"> (試合 {matchDetail.current_match}/{matchDetail.total_matches})</span>
               )}
             </p>
           )}
