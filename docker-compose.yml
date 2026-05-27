@@ -15,19 +15,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    networks:
-      default:
-        aliases:
-          - splat-highlight-pilot-api
-      splat-highlight-pilot-net:
-        aliases:
-          - splat-highlight-pilot-api
 
 volumes:
   shared-data:
     name: shared-data
-
-networks:
-  default:
-  splat-highlight-pilot-net:
-    name: splat-highlight-pilot-net

@@ -23,6 +23,9 @@ venv/
 node_modules/
 web/dist/
 
+# Docker
+docker-compose.override.yml
+
 # OS
 .DS_Store
 Thumbs.db
