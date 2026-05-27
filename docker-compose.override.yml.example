@@ -1,0 +1,13 @@
+services:
+  api:
+    networks:
+      default:
+        aliases:
+          - splat-highlight-pilot-api
+      splat-highlight-pilot-net:
+        aliases:
+          - splat-highlight-pilot-api
+
+networks:
+  splat-highlight-pilot-net:
+    external: true
