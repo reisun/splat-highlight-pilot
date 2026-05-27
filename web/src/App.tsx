@@ -18,6 +18,7 @@ type AppState =
 
 export default function App() {
   const [state, setState] = useState<AppState>({ phase: "idle" });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [spectatorMode, setSpectatorMode] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
 
@@ -44,7 +45,7 @@ export default function App() {
           break;
         case "error":
           cancelRef.current = null;
-          setState({ phase: "error", message: update.message ?? "An unexpected error occurred." });
+          setState({ phase: "error", message: update.message ?? "予期しないエラーが発生しました" });
           break;
       }
     });
@@ -52,7 +53,14 @@ export default function App() {
     cancelRef.current = cancel;
   }, []);
 
-  const handleFileSelected = useCallback((file: File) => {
+  const handleFileDrop = useCallback((file: File) => {
+    setSelectedFile(file);
+  }, []);
+
+  const handleStart = useCallback(() => {
+    if (!selectedFile) return;
+    const file = selectedFile;
+
     if (cancelRef.current) {
       cancelRef.current();
       cancelRef.current = null;
@@ -90,14 +98,14 @@ export default function App() {
           cancelRef.current = null;
           setState({
             phase: "error",
-            message: update.message ?? "An unexpected error occurred.",
+            message: update.message ?? "予期しないエラーが発生しました",
           });
           break;
       }
     }, options);
 
     cancelRef.current = cancel;
-  }, [spectatorMode]);
+  }, [selectedFile, spectatorMode]);
 
   const handleReset = useCallback(() => {
     if (cancelRef.current) {
@@ -105,6 +113,7 @@ export default function App() {
       cancelRef.current = null;
     }
     clearPendingJob();
+    setSelectedFile(null);
     setState({ phase: "idle" });
   }, []);
 
@@ -120,12 +129,26 @@ export default function App() {
       <main className="max-w-2xl mx-auto px-4 py-8">
         {state.phase === "idle" && (
           <>
-            <DropZone onFileSelected={handleFileSelected} disabled={false} />
+            <DropZone
+              onFileSelected={handleFileDrop}
+              disabled={false}
+              selectedFileName={selectedFile?.name}
+            />
             <OptionsPanel
               spectatorMode={spectatorMode}
               onSpectatorModeChange={setSpectatorMode}
               disabled={false}
             />
+            {selectedFile && (
+              <div className="mt-6 text-center">
+                <button
+                  onClick={handleStart}
+                  className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-lg"
+                >
+                  ハイライト作成開始
+                </button>
+              </div>
+            )}
           </>
         )}
         {(state.phase === "uploading" ||

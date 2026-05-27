@@ -24,7 +24,7 @@ export default function ErrorMessage({ message, onRetry }: ErrorMessageProps) {
         onClick={onRetry}
         className="mt-4 px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
       >
-        Try Again
+        やり直す
       </button>
     </div>
   );
