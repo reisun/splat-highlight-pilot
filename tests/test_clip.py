@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.clip import ClipError, _build_filter_complex, clip_video_async, process_clip
+from app.clip import (
+    ClipError,
+    _build_filter_complex,
+    clip_video_async,
+    process_clip,
+)
 
 
 class TestBuildFilterComplex:
@@ -45,6 +50,31 @@ class TestBuildFilterComplex:
         assert "trim=start=0:end=10" in result
         assert "trim=start=20:end=30" in result
         assert "trim=start=40:end=50" in result
+
+    def test_with_intro(self) -> None:
+        result = _build_filter_complex(
+            [{"start": "10", "end": "25"}],
+            intro=True,
+            target_width=1920,
+            target_height=1080,
+        )
+        assert "[1:v]trim=start=0:end=1.76" in result
+        assert "scale=1920:1080" in result
+        assert "[vintro][aintro]" in result
+        assert "concat=n=2:v=1:a=1[v][a]" in result
+
+    def test_with_intro_multiple_segments(self) -> None:
+        result = _build_filter_complex(
+            [
+                {"start": "10", "end": "20"},
+                {"start": "30", "end": "40"},
+            ],
+            intro=True,
+            target_width=1280,
+            target_height=720,
+        )
+        assert "concat=n=3:v=1:a=1[v][a]" in result
+        assert "[vintro][aintro][v0][a0][v1][a1]" in result
 
 
 class TestProcessClip:
@@ -133,6 +163,38 @@ class TestProcessClip:
         with pytest.raises(ClipError):
             process_clip(input_file, [{"start": "0", "end": "10"}], output_file)
 
+    @patch("app.clip._get_resolution", return_value=(1920, 1080))
+    @patch("app.clip.INTRO_VIDEO")
+    @patch("app.clip._run_ffmpeg")
+    def test_single_segment_with_intro_uses_filter_complex(
+        self,
+        mock_ffmpeg: MagicMock,
+        mock_intro: MagicMock,
+        _mock_res: MagicMock,
+        tmp_path,
+    ) -> None:
+        """単一セグメント+イントロは filter_complex を使用."""
+        input_file = tmp_path / "input.mp4"
+        input_file.write_bytes(b"\x00" * 100)
+        intro_file = tmp_path / "intro.mp4"
+        intro_file.write_bytes(b"\x00" * 100)
+        mock_intro.exists.return_value = True
+        mock_intro.__str__ = lambda s: str(intro_file)
+        output_file = tmp_path / "output.mp4"
+
+        mock_ffmpeg.return_value = MagicMock(returncode=0)
+
+        process_clip(
+            input_file, [{"start": "10", "end": "20"}], output_file, intro=True
+        )
+
+        call_args = mock_ffmpeg.call_args[0][0]
+        assert "-filter_complex" in call_args
+        fc_idx = call_args.index("-filter_complex")
+        fc_str = call_args[fc_idx + 1]
+        assert "[vintro]" in fc_str
+        assert "concat=n=2" in fc_str
+
 
 class TestClipVideoAsync:
     """clip_video_async の非同期ラッパーテスト."""
@@ -149,4 +211,6 @@ class TestClipVideoAsync:
 
         await clip_video_async(input_file, segments, output_file)
 
-        mock_process.assert_called_once_with(input_file, segments, output_file)
+        mock_process.assert_called_once_with(
+            input_file, segments, output_file, intro=False
+        )
