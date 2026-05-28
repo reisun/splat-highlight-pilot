@@ -58,7 +58,7 @@ class TestBuildFilterComplex:
             target_width=1920,
             target_height=1080,
         )
-        assert "[1:v]trim=start=0:end=1.76" in result
+        assert "[1:v]scale=1920:1080" in result
         assert "scale=1920:1080" in result
         assert "[vintro][aintro]" in result
         assert "concat=n=2:v=1:a=1[v][a]" in result

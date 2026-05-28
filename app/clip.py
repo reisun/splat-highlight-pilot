@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 FFMPEG_TIMEOUT = 600
 
 INTRO_VIDEO = Path(__file__).resolve().parent.parent / "resources" / "title_movie_1.mp4"
-INTRO_END = 1.76
 
 
 class ClipError(Exception):
@@ -78,13 +77,10 @@ def _build_filter_complex(
 
     if intro:
         parts.append(
-            f"[1:v]trim=start=0:end={INTRO_END},setpts=PTS-STARTPTS,"
-            f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2[vintro];"
+            f"[1:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[vintro];"
         )
-        parts.append(
-            f"[1:a]atrim=start=0:end={INTRO_END},asetpts=PTS-STARTPTS[aintro];"
-        )
+        parts.append("[1:a]asetpts=PTS-STARTPTS[aintro];")
         concat_count += 1
 
     parts.append(f"[0:v]split={n}" + "".join(f"[vc{i}]" for i in range(n)) + ";")
