@@ -14,6 +14,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY app/ app/
+COPY resources/ resources/
 
 RUN useradd -r -m -s /usr/sbin/nologin appuser
 USER appuser
