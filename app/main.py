@@ -415,7 +415,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             highlight_path = match_dir / "highlight.mp4"
 
             orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-            await clip_video_async(upload_path, segments, highlight_path)
+            await clip_video_async(upload_path, segments, highlight_path, intro=True)
             orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
 
             match_outputs.append(
