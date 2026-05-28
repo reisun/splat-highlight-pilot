@@ -28,7 +28,7 @@ export default function OptionsPanel({
           </span>
           <p className="text-xs text-gray-500 mt-0.5">
             ONにすると、キルのみでハイライトを判定します。
-            自チーム視点でない動画に適しています。
+            観戦時の動画はONを推奨します。
           </p>
         </div>
       </label>
