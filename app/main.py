@@ -323,9 +323,9 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         results_dir = SHARED_DATA_DIR / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Phase 2: Per-match analysis + clipping ---
+        # --- Phase 2: Per-match analysis ---
         orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-        match_outputs: list[dict] = []
+        match_analyses: list[dict] = []
         match_infos: list[dict] = []
 
         for i, match in enumerate(matches):
@@ -334,7 +334,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             match_start = match["start_seconds"]
             match_duration = match["duration_seconds"]
             match_end = match_start + match_duration
-            # KO（ノックアウト）対応: 次の試合がある場合、次の試合開始までに切り詰める
             if i + 1 < total_matches:
                 next_start = matches[i + 1]["start_seconds"]
                 match_end = min(match_end, next_start)
@@ -405,26 +404,11 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 for h in highlights
             ]
 
-            match_dir = results_dir / f"{job_id}_match_{i + 1}"
-            match_dir.mkdir(parents=True, exist_ok=True)
-
-            analysis_path = match_dir / "analysis.json"
-            analysis_path.write_text(
-                json.dumps(analysis_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
-            highlight_path = match_dir / "highlight.mp4"
-
-            orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-            await clip_video_async(upload_path, segments, highlight_path, intro=True)
-            orchestrator_jobs.set_phase(job_id, JobPhase.ANALYZING)
-
-            match_outputs.append(
+            match_analyses.append(
                 {
                     "match_index": i + 1,
-                    "highlight_path": str(highlight_path),
-                    "analysis_path": str(analysis_path),
+                    "analysis_data": analysis_data,
+                    "segments": segments,
                     "highlights": [
                         {
                             "start_seconds": h.start_seconds,
@@ -436,16 +420,31 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 }
             )
 
-        if not match_outputs:
+        if not match_analyses:
             orchestrator_jobs.mark_failed(job_id, "No highlights detected in any match")
             return
 
-        # --- Phase 3: Build zip ---
+        # --- Phase 3: Clipping + Build zip ---
         orchestrator_jobs.set_phase(job_id, JobPhase.CLIPPING)
-        zip_path = results_dir / f"{job_id}.zip"
-        _build_zip(match_outputs, zip_path, match_infos, scan_readings)
 
-        # Collect all highlights for job store
+        if opts.per_match:
+            match_outputs = await _clip_per_match(
+                job_id, upload_path, match_analyses, results_dir
+            )
+        else:
+            match_outputs = await _clip_combined(
+                job_id, upload_path, match_analyses, results_dir
+            )
+
+        zip_path = results_dir / f"{job_id}.zip"
+        _build_zip(
+            match_outputs,
+            zip_path,
+            match_infos,
+            scan_readings,
+            per_match=opts.per_match,
+        )
+
         all_highlights = []
         for mo in match_outputs:
             for h in mo["highlights"]:
@@ -458,13 +457,13 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 )
         orchestrator_jobs.set_highlights(job_id, all_highlights)
 
-        # Cleanup temp match dirs
         for mo in match_outputs:
-            _cleanup_file(Path(mo["highlight_path"]))
-            _cleanup_file(Path(mo["analysis_path"]))
-            match_dir = Path(mo["highlight_path"]).parent
-            with contextlib.suppress(OSError):
-                match_dir.rmdir()
+            for p in mo.get("temp_files", []):
+                _cleanup_file(Path(p))
+            temp_dir = mo.get("temp_dir")
+            if temp_dir:
+                with contextlib.suppress(OSError):
+                    Path(temp_dir).rmdir()
 
         orchestrator_jobs.mark_completed(job_id, f"/download/{job_id}")
     except Exception as e:  # noqa: BLE001
@@ -474,13 +473,91 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
         _cleanup_file(upload_path)
 
 
+async def _clip_per_match(
+    job_id: str,
+    upload_path: Path,
+    match_analyses: list[dict],
+    results_dir: Path,
+) -> list[dict]:
+    """試合ごとに個別のハイライト動画を作成する."""
+    match_outputs: list[dict] = []
+    for ma in match_analyses:
+        match_dir = results_dir / f"{job_id}_match_{ma['match_index']}"
+        match_dir.mkdir(parents=True, exist_ok=True)
+
+        analysis_path = match_dir / "analysis.json"
+        analysis_path.write_text(
+            json.dumps(ma["analysis_data"], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        highlight_path = match_dir / "highlight.mp4"
+        await clip_video_async(upload_path, ma["segments"], highlight_path, intro=True)
+
+        match_outputs.append(
+            {
+                "match_index": ma["match_index"],
+                "highlight_path": str(highlight_path),
+                "analysis_path": str(analysis_path),
+                "highlights": ma["highlights"],
+                "temp_files": [str(highlight_path), str(analysis_path)],
+                "temp_dir": str(match_dir),
+            }
+        )
+    return match_outputs
+
+
+async def _clip_combined(
+    job_id: str,
+    upload_path: Path,
+    match_analyses: list[dict],
+    results_dir: Path,
+) -> list[dict]:
+    """全試合のハイライト区間を1本の動画に結合する."""
+    temp_dir = results_dir / f"{job_id}_combined"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    all_segments: list[dict[str, str]] = []
+    all_analysis: list[dict] = []
+    all_highlights: list[dict] = []
+    for ma in match_analyses:
+        all_segments.extend(ma["segments"])
+        all_analysis.append(ma["analysis_data"])
+        all_highlights.extend(ma["highlights"])
+
+    combined_analysis = {
+        "matches": all_analysis,
+    }
+    analysis_path = temp_dir / "analysis.json"
+    analysis_path.write_text(
+        json.dumps(combined_analysis, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    highlight_path = temp_dir / "highlight.mp4"
+    await clip_video_async(upload_path, all_segments, highlight_path, intro=True)
+
+    return [
+        {
+            "combined": True,
+            "highlight_path": str(highlight_path),
+            "analysis_path": str(analysis_path),
+            "highlights": all_highlights,
+            "temp_files": [str(highlight_path), str(analysis_path)],
+            "temp_dir": str(temp_dir),
+        }
+    ]
+
+
 def _build_zip(
     match_outputs: list[dict],
     zip_path: Path,
     match_infos: list[dict] | None = None,
     scan_readings: list[dict] | None = None,
+    *,
+    per_match: bool = False,
 ) -> None:
-    """試合ごとのハイライトと分析結果を zip にまとめる."""
+    """ハイライトと分析結果を zip にまとめる."""
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         if match_infos is not None:
@@ -489,21 +566,30 @@ def _build_zip(
                 "scan_readings": scan_readings or [],
             }
             zf.writestr(
-                "matches.json",
+                "analysis/match.json",
                 json.dumps(matches_data, ensure_ascii=False, indent=2),
             )
 
-        for mo in match_outputs:
-            match_idx = mo["match_index"]
-            prefix = f"match_{match_idx}"
+        if per_match:
+            for mo in match_outputs:
+                match_idx = mo["match_index"]
 
+                highlight_path = Path(mo["highlight_path"])
+                if highlight_path.exists():
+                    zf.write(highlight_path, f"highlight-match-{match_idx}.mp4")
+
+                analysis_path = Path(mo["analysis_path"])
+                if analysis_path.exists():
+                    zf.write(analysis_path, f"analysis/analysis-match-{match_idx}.json")
+        else:
+            mo = match_outputs[0]
             highlight_path = Path(mo["highlight_path"])
             if highlight_path.exists():
-                zf.write(highlight_path, f"{prefix}/highlight.mp4")
+                zf.write(highlight_path, "highlight.mp4")
 
             analysis_path = Path(mo["analysis_path"])
             if analysis_path.exists():
-                zf.write(analysis_path, f"{prefix}/analysis.json")
+                zf.write(analysis_path, "analysis/analysis.json")
 
 
 async def _call_match_scan(
@@ -585,7 +671,7 @@ async def _call_analyzer_background(
     """バックグラウンド用: ジョブストアに進捗を書き込む版."""
     payload = {
         "file_path": file_path,
-        **opts.model_dump(exclude_none=True),
+        **opts.model_dump(exclude_none=True, exclude={"per_match"}),
     }
 
     async with _get_http_client() as client:

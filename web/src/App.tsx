@@ -20,6 +20,7 @@ export default function App() {
   const [state, setState] = useState<AppState>({ phase: "idle" });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [spectatorMode, setSpectatorMode] = useState(false);
+  const [perMatch, setPerMatch] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -68,9 +69,15 @@ export default function App() {
 
     setState({ phase: "uploading", fileName: file.name, percent: 0 });
 
-    const options: HighlightOptions | undefined = spectatorMode
-      ? { weights: { score_count_gain: 0 } }
-      : undefined;
+    const options: HighlightOptions = {};
+    if (spectatorMode) {
+      options.weights = { score_count_gain: 0 };
+    }
+    if (perMatch) {
+      options.per_match = true;
+    }
+    const finalOptions: HighlightOptions | undefined =
+      Object.keys(options).length > 0 ? options : undefined;
 
     const { cancel } = createHighlight(file, (update: ProgressUpdate) => {
       switch (update.phase) {
@@ -102,10 +109,10 @@ export default function App() {
           });
           break;
       }
-    }, options);
+    }, finalOptions);
 
     cancelRef.current = cancel;
-  }, [selectedFile, spectatorMode]);
+  }, [selectedFile, spectatorMode, perMatch]);
 
   const handleReset = useCallback(() => {
     if (cancelRef.current) {
@@ -137,6 +144,8 @@ export default function App() {
             <OptionsPanel
               spectatorMode={spectatorMode}
               onSpectatorModeChange={setSpectatorMode}
+              perMatch={perMatch}
+              onPerMatchChange={setPerMatch}
               disabled={false}
             />
             {selectedFile && (
