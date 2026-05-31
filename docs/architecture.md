@@ -45,17 +45,24 @@ shared-data (Docker volume)
     +-- {job_id}_analysis.json   <- 旧形式：分析データ（後方互換）
 ```
 
-zip 内構造:
+zip 内構造（デフォルト: 統合モード）:
 
 ```
-matches.json              <- 全試合の時間情報（match_number, start/end_seconds, duration_type, knockout）
-match_1/
-  highlight.mp4
-  analysis.json
-match_2/
-  highlight.mp4
-  analysis.json
-...
+highlight.mp4              <- 全試合のハイライトを1本に結合
+analysis/
+  match.json               <- 試合境界情報（match_number, start/end_seconds, duration_type, knockout）
+  analysis.json             <- 全試合の分析データ
+```
+
+zip 内構造（per_match=true: 試合別モード）:
+
+```
+highlight-match-1.mp4      <- 試合1のハイライト
+highlight-match-2.mp4      <- 試合2のハイライト
+analysis/
+  match.json               <- 試合境界情報
+  analysis-match-1.json    <- 試合1の分析データ
+  analysis-match-2.json    <- 試合2の分析データ
 ```
 
 ### ボリュームマウント設定
@@ -112,10 +119,11 @@ docker volume create shared-data
    b. 試合終了時刻（end）の計算: `start + duration_seconds` を基本とし、次の試合がある場合は `min(start + duration_seconds, 次の試合の start_seconds)` に切り詰める（KO早期終了時に余分な映像を含めないため）
    c. analyzer の非同期ジョブAPI（`POST /analyze/highlights/jobs`）を `start`/`end` 付きで呼び出し
    d. analyzer ジョブの完了をポーリングで待機
-   e. フェーズを `clipping` に設定
-   f. 内蔵 FFmpeg でハイライト区間をクリッピング・結合
-   g. 分析結果（analysis.json）を一時ディレクトリに保存
-7. 全マッチの成果物を zip にまとめる（match_1/, match_2/, ...）
+   e. ハイライト区間と分析データを蓄積
+7. フェーズを `clipping` に設定
+   - `per_match=false`（デフォルト）: 全試合のハイライト区間をまとめて1回のクリッピング（イントロは先頭に1回）
+   - `per_match=true`: 試合ごとに個別クリッピング（各試合にイントロ付き）
+8. 成果物を zip にまとめる
 8. フェーズを `completed` に設定、`download_url` を設定
 9. 一時ファイル（アップロード、マッチディレクトリ）を削除
 

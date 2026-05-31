@@ -33,6 +33,7 @@ export interface ProgressUpdate {
 
 export interface HighlightOptions {
   weights?: Record<string, number>;
+  per_match?: boolean;
 }
 
 const CHUNK_SIZE = 1024 * 1024;
