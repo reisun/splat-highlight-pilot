@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import urllib.parse
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -118,11 +119,13 @@ async def download(job_id: str) -> FileResponse:
         if job and job.filename:
             stem = Path(job.filename).stem
             zip_filename = f"{stem}_highlight.zip"
+        encoded = urllib.parse.quote(zip_filename)
+        cd = f"attachment; filename=\"highlight.zip\"; filename*=UTF-8''{encoded}"
         return FileResponse(
             path=str(zip_path),
             media_type="application/zip",
             filename=zip_filename,
-            headers={"Content-Disposition": (f'attachment; filename="{zip_filename}"')},
+            headers={"Content-Disposition": cd},
         )
 
     # 後方互換: 旧形式の mp4
@@ -132,7 +135,6 @@ async def download(job_id: str) -> FileResponse:
             path=str(mp4_path),
             media_type="video/mp4",
             filename="highlight.mp4",
-            headers={"Content-Disposition": ('attachment; filename="highlight.mp4"')},
         )
 
     raise HTTPException(status_code=404, detail="File not found")
