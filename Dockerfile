@@ -16,7 +16,8 @@ RUN uv sync --frozen --no-dev
 COPY app/ app/
 COPY resources/ resources/
 
-RUN useradd -r -m -s /usr/sbin/nologin appuser
+RUN useradd -r -m -s /usr/sbin/nologin appuser \
+    && mkdir -p /shared-data && chown appuser:appuser /shared-data
 USER appuser
 
 EXPOSE 8000
