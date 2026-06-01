@@ -48,21 +48,24 @@ shared-data (Docker volume)
 zip 内構造（デフォルト: 統合モード）:
 
 ```
-highlight.mp4              <- 全試合のハイライトを1本に結合
+highlight.mp4              <- 全試合のハイライトを1本に結合（ハイライト0件時は省略）
 analysis/
   match.json               <- 試合境界情報（match_number, start/end_seconds, duration_type, knockout）
-  analysis.json             <- 全試合の分析データ
+  analysis-match-1.json    <- 試合1の分析データ（ハイライト有無に関わらず全試合分出力）
+  analysis-match-2.json    <- 試合2の分析データ
+  ...
 ```
 
 zip 内構造（per_match=true: 試合別モード）:
 
 ```
-highlight-match-1.mp4      <- 試合1のハイライト
+highlight-match-1.mp4      <- 試合1のハイライト（ハイライト0件の試合は省略）
 highlight-match-2.mp4      <- 試合2のハイライト
 analysis/
   match.json               <- 試合境界情報
-  analysis-match-1.json    <- 試合1の分析データ
+  analysis-match-1.json    <- 試合1の分析データ（ハイライト有無に関わらず全試合分出力）
   analysis-match-2.json    <- 試合2の分析データ
+  ...
 ```
 
 ### ボリュームマウント設定

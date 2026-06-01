@@ -610,6 +610,57 @@ class TestMultiMatchPipeline:
         for payload in captured_payloads:
             assert "per_match" not in payload
 
+    @respx.mock
+    def test_no_highlights_completes_with_analysis(self, client, shared_dir):
+        """全試合でハイライト0件でも分析データ付きで completed になる."""
+        _mock_scan_responses()
+
+        no_highlight_result = AnalyzerResponse(
+            video="test.mp4",
+            model="test-model",
+            highlights=[],
+        )
+
+        respx.post(f"{ANALYZER_URL}/analyze/highlights/jobs").mock(
+            return_value=httpx.Response(200, json={"job_id": "hl-no-highlights"})
+        )
+        respx.get(f"{ANALYZER_URL}/analyze/highlights/jobs/hl-no-highlights").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "hl-no-highlights",
+                    "status": "completed",
+                    "progress": {
+                        "phase": 1,
+                        "phase_total": 1,
+                        "frames_done": 60,
+                        "frames_total": 60,
+                    },
+                    "result": no_highlight_result.model_dump(),
+                    "error": None,
+                    "started_at": 1234567890.0,
+                },
+            )
+        )
+
+        with (
+            patch("app.main.POLL_INTERVAL", 0),
+            client.websocket_connect("/ws/upload") as ws,
+        ):
+            _send_upload(ws)
+            job_msg = ws.receive_json()
+            job_id = job_msg["job_id"]
+
+        for _ in range(50):
+            resp = client.get(f"/jobs/{job_id}")
+            data = resp.json()
+            if data["phase"] in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        assert data["phase"] == "completed"
+        assert data["download_url"] is not None
+
 
 class TestGetJobStatus:
     """GET /jobs/{job_id} のテスト."""
@@ -745,14 +796,14 @@ class TestBuildZip:
         combined_dir.mkdir()
         highlight = combined_dir / "highlight.mp4"
         highlight.write_bytes(FAKE_MP4)
-        analysis = combined_dir / "analysis.json"
+        analysis = combined_dir / "analysis-match-1.json"
         analysis.write_text('{"test": true}', encoding="utf-8")
 
         match_outputs = [
             {
                 "combined": True,
                 "highlight_path": str(highlight),
-                "analysis_path": str(analysis),
+                "analysis_paths": [str(analysis)],
                 "highlights": [],
             }
         ]
@@ -774,7 +825,7 @@ class TestBuildZip:
             names = zf.namelist()
             assert "analysis/match.json" in names
             assert "highlight.mp4" in names
-            assert "analysis/analysis.json" in names
+            assert "analysis/analysis-match-1.json" in names
 
             matches_json = json.loads(zf.read("analysis/match.json"))
             matches_data = matches_json["matches"]
@@ -785,6 +836,35 @@ class TestBuildZip:
             assert matches_data[0]["duration_type"] == "5min"
             assert matches_data[0]["knockout"] is False
             assert "scan_readings" in matches_json
+
+    def test_combined_multiple_analysis_files(self, tmp_path):
+        """統合モード: 複数試合で analysis-match-N.json がそれぞれ入る."""
+        combined_dir = tmp_path / "combined"
+        combined_dir.mkdir()
+        highlight = combined_dir / "highlight.mp4"
+        highlight.write_bytes(FAKE_MP4)
+        a1 = combined_dir / "analysis-match-1.json"
+        a1.write_text('{"match_index": 1}', encoding="utf-8")
+        a2 = combined_dir / "analysis-match-2.json"
+        a2.write_text('{"match_index": 2}', encoding="utf-8")
+
+        match_outputs = [
+            {
+                "combined": True,
+                "highlight_path": str(highlight),
+                "analysis_paths": [str(a1), str(a2)],
+                "highlights": [],
+            }
+        ]
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path, [])
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "highlight.mp4" in names
+            assert "analysis/analysis-match-1.json" in names
+            assert "analysis/analysis-match-2.json" in names
 
     def test_per_match_multiple(self, tmp_path):
         """per_match モード: 複数試合の zip 構造."""
@@ -845,14 +925,14 @@ class TestBuildZip:
         combined_dir.mkdir()
         highlight = combined_dir / "highlight.mp4"
         highlight.write_bytes(FAKE_MP4)
-        analysis = combined_dir / "analysis.json"
+        analysis = combined_dir / "analysis-match-1.json"
         analysis.write_text("{}", encoding="utf-8")
 
         match_outputs = [
             {
                 "combined": True,
                 "highlight_path": str(highlight),
-                "analysis_path": str(analysis),
+                "analysis_paths": [str(analysis)],
                 "highlights": [],
             }
         ]
@@ -881,14 +961,14 @@ class TestBuildZip:
         combined_dir.mkdir()
         highlight = combined_dir / "highlight.mp4"
         highlight.write_bytes(FAKE_MP4)
-        analysis = combined_dir / "analysis.json"
+        analysis = combined_dir / "analysis-match-1.json"
         analysis.write_text("{}", encoding="utf-8")
 
         match_outputs = [
             {
                 "combined": True,
                 "highlight_path": str(highlight),
-                "analysis_path": str(analysis),
+                "analysis_paths": [str(analysis)],
                 "highlights": [],
             }
         ]
@@ -900,6 +980,40 @@ class TestBuildZip:
             names = zf.namelist()
             assert "analysis/match.json" not in names
             assert "highlight.mp4" in names
+
+    def test_no_highlights_analysis_only(self, tmp_path):
+        """ハイライト0件でも分析データのみ zip に含まれる."""
+        combined_dir = tmp_path / "combined"
+        combined_dir.mkdir()
+        a1 = combined_dir / "analysis-match-1.json"
+        a1.write_text('{"match_index": 1}', encoding="utf-8")
+
+        match_outputs = [
+            {
+                "combined": True,
+                "highlight_path": None,
+                "analysis_paths": [str(a1)],
+                "highlights": [],
+            }
+        ]
+        match_infos = [
+            {
+                "match_number": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 300.0,
+                "duration_type": "5min",
+                "knockout": False,
+            }
+        ]
+
+        zip_path = tmp_path / "output.zip"
+        _build_zip(match_outputs, zip_path, match_infos)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "analysis/match.json" in names
+            assert "analysis/analysis-match-1.json" in names
+            assert "highlight.mp4" not in names
 
 
 class TestCleanup:
