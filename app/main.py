@@ -364,9 +364,9 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
                 job_id, str(upload_path), match_opts
             )
 
-            if not analyzer_result or not analyzer_result.highlights:
+            if not analyzer_result:
                 logger.warning(
-                    "試合 %d/%d でハイライト未検出 job=%s",
+                    "試合 %d/%d で分析結果なし job=%s",
                     i + 1,
                     total_matches,
                     job_id,
@@ -375,6 +375,14 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
 
             highlights = analyzer_result.highlights
             all_frames = analyzer_result.frames
+
+            if not highlights:
+                logger.info(
+                    "試合 %d/%d でハイライト未検出 job=%s",
+                    i + 1,
+                    total_matches,
+                    job_id,
+                )
 
             analysis_data = {
                 "match_index": i + 1,
@@ -421,7 +429,7 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
             )
 
         if not match_analyses:
-            orchestrator_jobs.mark_failed(job_id, "No highlights detected in any match")
+            orchestrator_jobs.mark_failed(job_id, "No analysis data from any match")
             return
 
         # --- Phase 3: Clipping + Build zip ---
@@ -491,16 +499,22 @@ async def _clip_per_match(
             encoding="utf-8",
         )
 
-        highlight_path = match_dir / "highlight.mp4"
-        await clip_video_async(upload_path, ma["segments"], highlight_path, intro=True)
+        temp_files = [str(analysis_path)]
+        highlight_path = None
+        if ma["segments"]:
+            highlight_path = match_dir / "highlight.mp4"
+            await clip_video_async(
+                upload_path, ma["segments"], highlight_path, intro=True
+            )
+            temp_files.append(str(highlight_path))
 
         match_outputs.append(
             {
                 "match_index": ma["match_index"],
-                "highlight_path": str(highlight_path),
+                "highlight_path": str(highlight_path) if highlight_path else None,
                 "analysis_path": str(analysis_path),
                 "highlights": ma["highlights"],
-                "temp_files": [str(highlight_path), str(analysis_path)],
+                "temp_files": temp_files,
                 "temp_dir": str(match_dir),
             }
         )
@@ -518,32 +532,34 @@ async def _clip_combined(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     all_segments: list[dict[str, str]] = []
-    all_analysis: list[dict] = []
     all_highlights: list[dict] = []
+    analysis_paths: list[str] = []
     for ma in match_analyses:
         all_segments.extend(ma["segments"])
-        all_analysis.append(ma["analysis_data"])
         all_highlights.extend(ma["highlights"])
 
-    combined_analysis = {
-        "matches": all_analysis,
-    }
-    analysis_path = temp_dir / "analysis.json"
-    analysis_path.write_text(
-        json.dumps(combined_analysis, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        analysis_path = temp_dir / f"analysis-match-{ma['match_index']}.json"
+        analysis_path.write_text(
+            json.dumps(ma["analysis_data"], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        analysis_paths.append(str(analysis_path))
 
-    highlight_path = temp_dir / "highlight.mp4"
-    await clip_video_async(upload_path, all_segments, highlight_path, intro=True)
+    temp_files = list(analysis_paths)
+    highlight_path = None
+    if all_segments:
+        highlight_path = temp_dir / "highlight.mp4"
+        await clip_video_async(upload_path, all_segments, highlight_path, intro=True)
+        temp_files.append(str(highlight_path))
 
     return [
         {
             "combined": True,
-            "highlight_path": str(highlight_path),
-            "analysis_path": str(analysis_path),
+            "highlight_path": str(highlight_path) if highlight_path else None,
+            "analysis_paths": analysis_paths,
+            "match_analyses": match_analyses,
             "highlights": all_highlights,
-            "temp_files": [str(highlight_path), str(analysis_path)],
+            "temp_files": temp_files,
             "temp_dir": str(temp_dir),
         }
     ]
@@ -574,22 +590,30 @@ def _build_zip(
             for mo in match_outputs:
                 match_idx = mo["match_index"]
 
-                highlight_path = Path(mo["highlight_path"])
-                if highlight_path.exists():
-                    zf.write(highlight_path, f"highlight-match-{match_idx}.mp4")
+                if mo.get("highlight_path"):
+                    highlight_path = Path(mo["highlight_path"])
+                    if highlight_path.exists():
+                        zf.write(highlight_path, f"highlight-match-{match_idx}.mp4")
 
                 analysis_path = Path(mo["analysis_path"])
                 if analysis_path.exists():
                     zf.write(analysis_path, f"analysis/analysis-match-{match_idx}.json")
         else:
             mo = match_outputs[0]
-            highlight_path = Path(mo["highlight_path"])
-            if highlight_path.exists():
-                zf.write(highlight_path, "highlight.mp4")
+            if mo.get("highlight_path"):
+                highlight_path = Path(mo["highlight_path"])
+                if highlight_path.exists():
+                    zf.write(highlight_path, "highlight.mp4")
 
-            analysis_path = Path(mo["analysis_path"])
-            if analysis_path.exists():
-                zf.write(analysis_path, "analysis/analysis.json")
+            if mo.get("analysis_paths"):
+                for ap in mo["analysis_paths"]:
+                    ap_path = Path(ap)
+                    if ap_path.exists():
+                        zf.write(ap_path, f"analysis/{ap_path.name}")
+            elif mo.get("analysis_path"):
+                analysis_path = Path(mo["analysis_path"])
+                if analysis_path.exists():
+                    zf.write(analysis_path, f"analysis/{analysis_path.name}")
 
 
 async def _call_match_scan(
