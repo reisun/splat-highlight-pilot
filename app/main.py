@@ -224,6 +224,18 @@ async def download_analysis(job_id: str) -> FileResponse:
     )
 
 
+def _download_expires_at(job_id: str) -> str | None:
+    """Use the same file mtime and retention age as the cleanup routine."""
+    for suffix in (".zip", ".mp4"):
+        path = SHARED_DATA_DIR / "results" / f"{job_id}{suffix}"
+        try:
+            expires = path.stat().st_mtime + CLEANUP_MAX_AGE
+        except FileNotFoundError:
+            continue
+        return datetime.fromtimestamp(expires, UTC).isoformat()
+    return None
+
+
 @app.get("/jobs/{job_id}", response_model=OrchestratorJobStatusResponse)
 async def get_job_status(
     job_id: str,
@@ -264,6 +276,11 @@ async def get_job_status(
         analyzer_progress=progress,
         match_progress=match_progress,
         download_url=job.download_url,
+        download_expires_at=(
+            _download_expires_at(job.job_id)
+            if job.phase == JobPhase.COMPLETED
+            else None
+        ),
         analysis_url=analysis_url,
         error=job.error,
         started_at=job.started_at,

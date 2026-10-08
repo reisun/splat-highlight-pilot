@@ -1213,3 +1213,29 @@ def test_cors_rejects_other_origins(client):
     )
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+
+@pytest.mark.parametrize("suffix", [".zip", ".mp4"])
+def test_download_expiry_matches_cleanup_boundary(client, shared_dir, suffix):
+    """A displayed expiry uses file age and cannot precede scheduled deletion."""
+    from datetime import datetime
+
+    job = orchestrator_jobs.create()
+    orchestrator_jobs.mark_completed(job.job_id, f"/download/{job.job_id}")
+    results = shared_dir / "results"
+    results.mkdir()
+    video = results / f"{job.job_id}{suffix}"
+    video.write_bytes(b"test-result")
+    modified = time.time() - 3600
+    os.utime(video, (modified, modified))
+    retention = 43200
+    with patch("app.main.CLEANUP_MAX_AGE", retention):
+        response = client.get(f"/jobs/{job.job_id}").json()
+    expires = datetime.fromisoformat(response["download_expires_at"]).timestamp()
+    assert expires == pytest.approx(modified + retention, rel=0, abs=0.000001)
+    with patch("app.job_store.time.time", return_value=modified + retention):
+        orchestrator_jobs.cleanup_old(shared_dir, retention)
+    assert video.exists()
+    with patch("app.job_store.time.time", return_value=modified + retention + 1):
+        orchestrator_jobs.cleanup_old(shared_dir, retention)
+    assert not video.exists()
