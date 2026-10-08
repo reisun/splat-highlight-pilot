@@ -56,8 +56,8 @@ REST エンドポイントと WebSocket エンドポイントで構成される�
    ```json
    {"type": "start", "filename": "video.mp4", "size": 123456789}
    ```
-3. サーバーが接続を受け付ける
-4. クライアントが動画データをバイナリフレームでチャンク送信
+3. サーバーがサイズ・排他・analyzer実状態を確認し、`{"type":"ready"}` を返す。クライアントはこれを待ってから動画を送る。処理中・状態不明なら `busy` と再アクセス案内を返して接続を閉じ、ジョブを作成しない。
+4. クライアントが動画を最大1MiBのチャンクで送信。各チャンクの進捗応答を待って次を送る。
 5. サーバーがチャンクごとに進捗を返す（テキストフレーム）:
    ```json
    {"type": "progress", "phase": "uploading", "percent": 42}
@@ -78,7 +78,7 @@ REST エンドポイントと WebSocket エンドポイントで構成される�
 |---|---|---|---|
 | type | string | Yes | 固定値 "start" |
 | filename | string | No | ファイル名（デフォルト: "video.mp4"） |
-| size | integer | No | ファイルサイズ（バイト）。進捗計算に使用 |
+| size | integer | Yes | 1〜15,000,000,000バイト。実受信量との一致を必須とする |
 | options | object | No | AnalyzerOptions（下記参照） |
 
 #### エラーメッセージ
@@ -331,3 +331,16 @@ WebSocket アップロード時に `options` フィールドで渡せるオプ�
 ## タイムアウト
 
 外部サービスへの HTTP リクエストは環境変数 `HTTP_TIMEOUT`（デフォルト 300 秒）のタイムアウトを設定。
+
+
+## GET /processing と受付拒否
+
+受付側の永続記録と analyzer の実行状態、FFmpegのPID・起動時刻を照合できる。`recorded`、`recorded_progress`、`actual_analyzer`、`actual_converter` を返す。実処理状態が取得できない間は `busy=true` とする。
+
+WebSocket受付拒否例:
+
+```json
+{"type":"busy","message":"現在処理中、または状態確認中です。時間をおいて再度アクセスしてください。","estimated_finish_at":null,"retry_after_seconds":60}
+```
+
+推定終了時刻は現在 `null`（不明）。工程全体を見積もる実測値がないため時刻を断定しない。再アクセス目安は60秒で、予約・自動再試行は行わない。[アップロード制限](upload-policy.md)も参照。

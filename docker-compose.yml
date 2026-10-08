@@ -7,7 +7,7 @@ services:
       - shared-data:/shared-data
       - .:/app
     user: root
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--ws-max-queue", "2", "--reload"]
     environment:
       - UV_PROJECT_ENVIRONMENT=/opt/venv
     env_file:

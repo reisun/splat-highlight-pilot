@@ -40,3 +40,6 @@ e2e_tests/data/*
 
 # Generated runtime endpoint
 web/public/config.json
+
+# Local processing recovery state
+.state/
