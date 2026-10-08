@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths: ['web/**', '.github/workflows/deploy-pages.yml']
   workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: API HTTPS origin for this deployment
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,10 +39,24 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Build
+      - name: Write runtime API config
         working-directory: web
         env:
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          QUICK_TUNNEL_URL: ${{ inputs.api_base_url || vars.QUICK_TUNNEL_URL }}
+        run: |
+          mkdir -p public
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          const url = new URL(process.env.QUICK_TUNNEL_URL);
+          if (url.protocol !== 'https:' || url.username || url.password ||
+              url.pathname !== '/' || url.search || url.hash) {
+            throw new Error('QUICK_TUNNEL_URL must be an HTTPS origin');
+          }
+          writeFileSync('public/config.json', JSON.stringify({ apiBaseUrl: url.origin }) + '\n');
+          JS
+
+      - name: Build
+        working-directory: web
         run: npm run build
 
       - uses: actions/configure-pages@v5

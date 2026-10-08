@@ -10,7 +10,10 @@ analyzer（ハイライト検出）と内蔵 FFmpeg クリッピングを組み�
 ```
 [Web UI]                   <- React + TypeScript + Vite (GitHub Pages)
    |
-   |  HTTPS (CORS)
+   |  HTTPS / WSS (runtime config.json)
+   v
+[Cloudflare Quick Tunnel]
+   |  HTTP / WS
    v
 [orchestrator :8030]       <- splat-highlight-pilot (FastAPI + FFmpeg)
    |
@@ -31,7 +34,10 @@ analyzer（ハイライト検出）と内蔵 FFmpeg クリッピングを組み�
 ## ネットワーク
 
 - 各サービスは独立した docker-compose で起動し、`host.docker.internal` 経由で通信
-- Web UI は外部から orchestrator のポート 8030 にアクセス
+- Web UI は `config.json` の `apiBaseUrl` から Quick Tunnel 経由で orchestrator にアクセス
+- Pages workflow はリポジトリ変数 `QUICK_TUNNEL_URL` から runtime config を生成する
+- Caddy の外部ネットワークは使用しない。トンネルは API の Compose ネットワークに参加する
+- API が Pages origin の CORS を許可する。WebSocket アップロードと HTTP ポーリングを使用する
 
 ## 共有ボリューム
 

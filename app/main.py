@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.clip import clip_video_async
@@ -63,6 +64,15 @@ app = FastAPI(
     description=("スプラトゥーン試合動画ハイライト自動切り出しオーケストレーター"),
     version="0.4.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://reisun.github.io"],
+    allow_origin_regex=r"http://(?:localhost|127\.0\.0\.1)(?::\d+)?",
+    allow_methods=["GET"],
+    allow_headers=["Content-Type"],
+    expose_headers=["Content-Disposition"],
 )
 
 

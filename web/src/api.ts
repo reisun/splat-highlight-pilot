@@ -1,7 +1,7 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+import { getApiBaseUrl } from "./config";
 
 function wsUrl(): string {
-  const base = API_BASE_URL || window.location.origin;
+  const base = getApiBaseUrl();
   return base.replace(/^http/, "ws");
 }
 
@@ -51,7 +51,7 @@ export function resumeJob(
   jobId: string,
   onProgress: (update: ProgressUpdate) => void,
 ): { cancel: () => void } {
-  const API = API_BASE_URL || window.location.origin;
+  const API = getApiBaseUrl();
   let cancelled = false;
 
   const poll = async () => {
@@ -99,8 +99,8 @@ export function resumeJob(
         } else if (data.phase === "completed") {
           onProgress({
             phase: "done",
-            downloadUrl: `${API_BASE_URL}${data.download_url}`,
-            analysisUrl: data.analysis_url ? `${API_BASE_URL}${data.analysis_url}` : undefined,
+            downloadUrl: `${getApiBaseUrl()}${data.download_url}`,
+            analysisUrl: data.analysis_url ? `${getApiBaseUrl()}${data.analysis_url}` : undefined,
           });
           return;
         } else if (data.phase === "failed") {
