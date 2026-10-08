@@ -16,6 +16,7 @@ export default function ResultView({ downloadUrl, onReset }: ResultViewProps) {
           className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium w-64"
         >
           ダウンロード
+          <span className="block text-xs mt-1">約12時間有効</span>
         </a>
         <button
           onClick={onReset}
