@@ -24,6 +24,7 @@ export interface ProgressUpdate {
   phase: Phase;
   percent?: number;
   downloadUrl?: string;
+  downloadExpiresAt?: string;
   analysisUrl?: string;
   message?: string;
   analyzerDetail?: AnalyzerDetail;
@@ -101,6 +102,7 @@ export function resumeJob(
           onProgress({
             phase: "done",
             downloadUrl: `${getApiBaseUrl()}${data.download_url}`,
+            downloadExpiresAt: data.download_expires_at ?? undefined,
             analysisUrl: data.analysis_url ? `${getApiBaseUrl()}${data.analysis_url}` : undefined,
           });
           return;

@@ -246,6 +246,7 @@ class OrchestratorJobStatusResponse(BaseModel):
     analyzer_progress: OrchestratorAnalyzerProgress | None = None
     match_progress: OrchestratorMatchProgress | None = None
     download_url: str | None = None
+    download_expires_at: str | None = None
     analysis_url: str | None = None
     error: str | None = None
     started_at: float | None = None

@@ -13,7 +13,7 @@ type AppState =
   | { phase: "scanning"; fileName: string; analyzerDetail?: AnalyzerDetail }
   | { phase: "analyzing"; fileName: string; analyzerDetail?: AnalyzerDetail; matchDetail?: MatchDetail }
   | { phase: "clipping"; fileName: string; matchDetail?: MatchDetail }
-  | { phase: "done"; downloadUrl: string; analysisUrl?: string }
+  | { phase: "done"; downloadUrl: string; analysisUrl?: string; downloadExpiresAt?: string }
   | { phase: "error"; message: string };
 
 export default function App() {
@@ -42,7 +42,7 @@ export default function App() {
           break;
         case "done":
           cancelRef.current = null;
-          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl });
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl, downloadExpiresAt: update.downloadExpiresAt });
           break;
         case "error":
           cancelRef.current = null;
@@ -99,7 +99,7 @@ export default function App() {
           break;
         case "done":
           cancelRef.current = null;
-          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl });
+          setState({ phase: "done", downloadUrl: update.downloadUrl ?? "", analysisUrl: update.analysisUrl, downloadExpiresAt: update.downloadExpiresAt });
           break;
         case "error":
           cancelRef.current = null;
@@ -179,6 +179,7 @@ export default function App() {
         {state.phase === "done" && (
           <ResultView
             downloadUrl={state.downloadUrl}
+            downloadExpiresAt={state.downloadExpiresAt}
             onReset={handleReset}
           />
         )}
