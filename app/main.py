@@ -7,9 +7,11 @@ import contextlib
 import json
 import logging
 import os
+import time
 import urllib.parse
 import zipfile
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +20,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app import clip
+from app.admission import AdmissionController
 from app.clip import clip_video_async
 from app.job_store import HighlightInfo, JobPhase, OrchestratorJobStore
 from app.schemas import (
@@ -35,6 +39,7 @@ from app.schemas import (
     OrchestratorMatchProgress,
     ServiceStatus,
 )
+from app.upload_policy import UploadPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,14 @@ POLL_INTERVAL = 3
 CLEANUP_INTERVAL = float(os.environ.get("CLEANUP_INTERVAL", "3600"))
 CLEANUP_MAX_AGE = float(os.environ.get("CLEANUP_MAX_AGE", "3600"))
 
+MAX_UPLOAD_BYTES = 15_000_000_000
+MAX_CHUNK_BYTES = 1024 * 1024
+UPLOAD_MAX_SECONDS = 3600
+UPLOAD_IDLE_SECONDS = 60
+UPLOAD_GRACE_SECONDS = 120
+UPLOAD_SLOW_SECONDS = 60
+admission: AdmissionController | None = None
+_pipeline_tasks: set[asyncio.Task] = set()
 orchestrator_jobs = OrchestratorJobStore()
 _STARTED_AT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -52,11 +65,28 @@ _STARTED_AT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # noqa: ANN201
     """アプリ起動時に定期クリーンアップタスクを開始する."""
+    global admission
+    admission = AdmissionController(SHARED_DATA_DIR / ".state")
+    orchestrator_jobs.configure(SHARED_DATA_DIR / ".state" / "jobs.json")
+    orchestrator_jobs.on_change = _persist_progress
+    await _reconcile_abandoned()
     task = asyncio.create_task(_periodic_cleanup())
-    yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    recovery_task = asyncio.create_task(_periodic_reconcile())
+    try:
+        yield
+    finally:
+        task.cancel()
+        recovery_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await recovery_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        for pipeline in list(_pipeline_tasks):
+            pipeline.cancel()
+        await asyncio.gather(*list(_pipeline_tasks), return_exceptions=True)
+        orchestrator_jobs.on_change = None
+        admission.close()
+        admission = None
 
 
 app = FastAPI(
@@ -76,12 +106,38 @@ app.add_middleware(
 )
 
 
+async def _reconcile_abandoned() -> None:
+    if admission is None or admission.lock_fd is not None:
+        return
+    if not admission.try_acquire():
+        return
+    try:
+        if admission.snapshot() is None:
+            admission.release()
+            return
+        safe = await _recover_owned_record()
+        admission.release(clear=safe)
+    finally:
+        admission.close()
+
+
+async def _periodic_reconcile() -> None:
+    while True:
+        await asyncio.sleep(15)
+        try:
+            await _reconcile_abandoned()
+        except Exception:  # noqa: BLE001
+            logger.exception("中断した処理の状態確認に失敗")
+
+
 async def _periodic_cleanup() -> None:
     """定期的に古いジョブとファイルを削除する."""
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         try:
-            orchestrator_jobs.cleanup_old(SHARED_DATA_DIR, CLEANUP_MAX_AGE)
+            # Preserve input/results while processing or awaiting reconciliation.
+            if admission and admission.snapshot() is None:
+                orchestrator_jobs.cleanup_old(SHARED_DATA_DIR, CLEANUP_MAX_AGE)
         except Exception:  # noqa: BLE001
             logger.exception("クリーンアップ中にエラー")
 
@@ -214,89 +270,289 @@ async def get_job_status(
     )
 
 
+def _persist_progress(job) -> None:  # noqa: ANN001
+    if admission and admission.lock_fd is not None:
+        record = admission.snapshot()
+        if record and record.get("job_id") == job.job_id:
+            admission.update(phase=job.phase.value, job=asdict(job))
+
+
+def _converter_identity(pid: int) -> str | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # Field 22 is starttime; comm can contain spaces and parentheses.
+        return stat.rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _observe_converter(pid: int | None) -> None:
+    if admission and admission.lock_fd is not None:
+        admission.update(
+            converter_pid=pid, converter_start=_converter_identity(pid) if pid else None
+        )
+
+
+def _converter_state(record: dict | None) -> dict:
+    pid = record.get("converter_pid") if record else None
+    identity = _converter_identity(pid) if isinstance(pid, int) else None
+    return {
+        "pid": pid,
+        "running": bool(identity and identity == record.get("converter_start")),
+        "lock_held": bool(admission and admission.is_locked()),
+    }
+
+
+async def _backend_state() -> dict:
+    async with _get_http_client() as client:
+        response = await client.get(f"{ANALYZER_URL}/processing", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        if (
+            not isinstance(data, dict)
+            or type(data.get("busy")) is not bool
+            or not isinstance(data.get("operations"), list)
+            or data["busy"] != bool(data["operations"])
+        ):
+            raise RuntimeError("Invalid analyzer processing state")
+        return data
+
+
+async def _recover_owned_record() -> bool:
+    """Caller holds flock. Never treat an unreachable analyzer as idle."""
+    assert admission is not None  # noqa: S101
+    record = admission.snapshot()
+    try:
+        actual = await _backend_state()
+    except (httpx.HTTPError, ValueError, RuntimeError):
+        admission.update(phase="checking", estimated_finish_at=None)
+        return False
+    admission.update(actual_analyzer=actual, estimated_finish_at=None)
+    if actual["busy"]:
+        return False
+    if record:
+        job_id = record.get("job_id")
+        job = orchestrator_jobs.get(job_id) if job_id else None
+        if job and job.phase not in (JobPhase.COMPLETED, JobPhase.FAILED):
+            orchestrator_jobs.mark_failed(
+                job_id, "処理が中断されました。再度アップロードしてください。"
+            )
+        path = record.get("upload_path")
+        if path:
+            _cleanup_file(Path(path))
+    return True
+
+
+@app.get("/processing")
+async def processing_status() -> dict:
+    """Compare recorded progress with actual analyzer and converter activity."""
+    record = admission.snapshot() if admission else None
+    try:
+        actual = await _backend_state()
+    except (httpx.HTTPError, ValueError, RuntimeError):
+        actual = None
+    return {
+        "busy": bool(record)
+        or bool(admission and admission.is_locked())
+        or actual is None
+        or bool(actual["busy"]),
+        "recorded": None
+        if not record
+        else {
+            key: record.get(key)
+            for key in (
+                "phase",
+                "received_bytes",
+                "total_bytes",
+                "updated_at",
+                "backend_job_id",
+                "backend_kind",
+                "estimated_finish_at",
+            )
+        },
+        "recorded_progress": (record.get("job") or {}).get("analyzer_progress")
+        if record
+        else None,
+        "actual_analyzer": actual,
+        "actual_converter": _converter_state(record),
+    }
+
+
+async def _run_owned_pipeline(
+    job_id: str, upload_path: Path, opts: AnalyzerOptions
+) -> None:
+    assert admission is not None  # noqa: S101
+    try:
+        await _run_pipeline(job_id, upload_path, opts)
+    except asyncio.CancelledError:
+        orchestrator_jobs.mark_failed(job_id, "処理が中断されました。")
+        raise
+    finally:
+        clip.PROCESS_LOCK_FD = None
+        clip.PROCESS_OBSERVER = None
+        record = admission.snapshot() or {}
+        safe = not record.get("backend_pending", False)
+        if not safe:
+            try:
+                safe = not (await _backend_state())["busy"]
+            except (httpx.HTTPError, ValueError, RuntimeError):
+                safe = False
+        if safe:
+            _cleanup_file(upload_path)
+        admission.release(clear=safe)
+
+
 @app.websocket("/ws/upload")
 async def ws_upload(websocket: WebSocket) -> None:
-    """動画アップロード専用WebSocket。"""
+    """Admit one bounded upload and hand its lock to the whole processing pipeline."""
     await websocket.accept()
     upload_path: Path | None = None
-
+    owns_lock = False
+    handed_off = False
+    job_id = None
     try:
-        start_raw = await websocket.receive_text()
-        start_msg = json.loads(start_raw)
-
+        start_msg = json.loads(
+            await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        )
         if start_msg.get("type") != "start":
-            await websocket.send_json(
-                {"type": "error", "message": "Expected start message"}
-            )
-            await websocket.close()
-            return
-
+            raise ValueError("Expected start message")
+        total_size = start_msg.get("size")
+        if type(total_size) is not int or not 0 < total_size <= MAX_UPLOAD_BYTES:
+            raise ValueError("動画サイズは0バイトより大きく、15GB以下にしてください。")
         filename = start_msg.get("filename", "video.mp4")
-        total_size = start_msg.get("size", 0)
-        options_raw = start_msg.get("options") or {}
-        opts = AnalyzerOptions(**options_raw)
-
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or "/" in filename
+            or "\\" in filename
+        ):
+            raise ValueError("Invalid filename")
+        opts = AnalyzerOptions(**(start_msg.get("options") or {}))
+        if admission is None:
+            raise RuntimeError("受付サービスが準備中です。")
+        owns_lock = admission.try_acquire()
+        if not owns_lock or not await _recover_owned_record():
+            await websocket.send_json(
+                {
+                    "type": "busy",
+                    "message": (
+                        "現在処理中、または状態確認中です。"
+                        "時間をおいて再度アクセスしてください。"
+                    ),
+                    "estimated_finish_at": None,
+                    "retry_after_seconds": 60,
+                }
+            )
+            await websocket.close(code=1013)
+            if owns_lock:
+                admission.release(clear=False)
+                owns_lock = False
+            return
         job = orchestrator_jobs.create()
         job_id = job.job_id
-
         orchestrator_jobs.set_filename(job_id, filename)
-
         upload_dir = SHARED_DATA_DIR / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
         upload_path = upload_dir / f"{job_id}_{filename}"
-
-        received = 0
-        with open(upload_path, "wb") as f:  # noqa: PTH123
-            while True:
-                msg = await websocket.receive()
-
-                if "text" in msg and msg["text"] is not None:
-                    text_data = json.loads(msg["text"])
-                    if text_data.get("type") == "upload_complete":
-                        break
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Unexpected message",
-                        }
-                    )
-                    await websocket.close()
-                    return
-
-                if "bytes" in msg and msg["bytes"] is not None:
-                    chunk = msg["bytes"]
-                    f.write(chunk)
-                    received += len(chunk)
-                    percent = int(received / total_size * 100) if total_size else 0
-                    await websocket.send_json(
-                        {
-                            "type": "progress",
-                            "phase": "uploading",
-                            "percent": percent,
-                        }
-                    )
-
         orchestrator_jobs.set_upload_path(job_id, str(upload_path))
-        asyncio.create_task(  # noqa: RUF006
-            _run_pipeline(job_id, upload_path, opts)
+        admission.update(
+            job_id=job_id,
+            phase="uploading",
+            received_bytes=0,
+            total_bytes=total_size,
+            upload_path=str(upload_path),
+            backend_pending=False,
+            backend_job_id=None,
+            backend_kind=None,
+            converter_pid=None,
+            converter_start=None,
+            estimated_finish_at=None,
+            job=asdict(job),
         )
-
+        await websocket.send_json({"type": "ready"})
+        received = 0
+        policy = UploadPolicy(
+            total_size,
+            clock=time.monotonic,
+            max_seconds=UPLOAD_MAX_SECONDS,
+            grace=UPLOAD_GRACE_SECONDS,
+            slow_seconds=UPLOAD_SLOW_SECONDS,
+        )
+        with upload_path.open("wb") as f:
+            while True:
+                remaining = policy.remaining_seconds
+                if remaining <= 0:
+                    raise ValueError("アップロードが1時間を超えたため中断しました。")
+                msg = await asyncio.wait_for(
+                    websocket.receive(), timeout=min(UPLOAD_IDLE_SECONDS, remaining)
+                )
+                if msg["type"] == "websocket.disconnect":
+                    raise WebSocketDisconnect()
+                if msg.get("text") is not None:
+                    control = json.loads(msg["text"])
+                    if control.get("type") != "upload_complete":
+                        raise ValueError("Unexpected message")
+                    if received != total_size:
+                        raise ValueError("申告サイズと受信サイズが一致しません。")
+                    break
+                chunk = msg.get("bytes")
+                if not chunk or len(chunk) > MAX_CHUNK_BYTES:
+                    raise ValueError("Invalid upload chunk")
+                if received + len(chunk) > min(total_size, MAX_UPLOAD_BYTES):
+                    raise ValueError("動画の受信量がサイズ上限を超えました。")
+                f.write(chunk)
+                received += len(chunk)
+                try:
+                    policy.note_received(received)
+                except ValueError as exc:
+                    raise ValueError(
+                        "完了まで1時間を超えるアップロードのため中断しました。"
+                    ) from exc
+                admission.update(
+                    received_bytes=received,
+                    upload_elapsed_seconds=policy.elapsed,
+                    estimated_finish_at=None,
+                )
+                await websocket.send_json(
+                    {
+                        "type": "progress",
+                        "phase": "uploading",
+                        "percent": int(received / total_size * 100),
+                    }
+                )
+        clip.PROCESS_LOCK_FD = admission.lock_fd
+        clip.PROCESS_OBSERVER = _observe_converter
+        task = asyncio.create_task(_run_owned_pipeline(job_id, upload_path, opts))
+        _pipeline_tasks.add(task)
+        task.add_done_callback(_pipeline_tasks.discard)
+        handed_off = True
+        owns_lock = False
         await websocket.send_json({"type": "job_created", "job_id": job_id})
         await websocket.close()
-        upload_path = None
-
     except WebSocketDisconnect:
-        upload_path = None
-    except Exception as e:  # noqa: BLE001
-        logger.exception("WebSocket処理中にエラーが発生")
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-            await websocket.close()
-        except Exception:  # noqa: BLE001, S110
-            pass
+        if job_id and not handed_off:
+            orchestrator_jobs.mark_failed(job_id, "アップロードが中断されました。")
+    except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+        if job_id and not handed_off:
+            orchestrator_jobs.mark_failed(
+                job_id, str(exc) or "アップロードが中断されました。"
+            )
+        with contextlib.suppress(Exception):
+            message = (
+                "受信が停止したためアップロードを中断しました。"
+                if isinstance(exc, TimeoutError)
+                else str(exc)
+            )
+            await websocket.send_json({"type": "error", "message": message})
+            await websocket.close(code=1008)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
     finally:
-        if upload_path:
-            _cleanup_file(upload_path)
+        if not handed_off:
+            if upload_path:
+                _cleanup_file(upload_path)
+            if owns_lock and admission:
+                admission.release()
 
 
 def _flatten_clipped_scores(
@@ -487,8 +743,6 @@ async def _run_pipeline(job_id: str, upload_path: Path, opts: AnalyzerOptions) -
     except Exception as e:  # noqa: BLE001
         logger.exception("パイプライン処理中にエラー job=%s", job_id)
         orchestrator_jobs.mark_failed(job_id, str(e))
-    finally:
-        _cleanup_file(upload_path)
 
 
 async def _clip_per_match(
@@ -633,6 +887,10 @@ async def _call_match_scan(
     """analyzer の試合境界スキャンAPIを呼び出す.matches と readings を返す."""
     payload = {"file_path": file_path, "interval": 30.0}
 
+    if admission and admission.lock_fd is not None:
+        admission.update(
+            backend_pending=True, backend_kind="dispatching", backend_job_id=None
+        )
     async with _get_http_client() as client:
         try:
             resp = await client.post(
@@ -652,6 +910,8 @@ async def _call_match_scan(
 
         scan_job_data = resp.json()
         scan_job_id = scan_job_data["job_id"]
+        if admission and admission.lock_fd is not None:
+            admission.update(backend_kind="scan", backend_job_id=scan_job_id)
 
         while True:
             await asyncio.sleep(POLL_INTERVAL)
@@ -682,6 +942,12 @@ async def _call_match_scan(
                     frames_total=scan_status.progress.frames_total,
                 )
 
+            if (
+                scan_status.status in ("completed", "failed")
+                and admission
+                and admission.lock_fd is not None
+            ):
+                admission.update(backend_pending=False)
             if scan_status.status == "completed":
                 if scan_status.result:
                     result = scan_status.result
@@ -708,6 +974,10 @@ async def _call_analyzer_background(
         **opts.model_dump(exclude_none=True, exclude={"per_match"}),
     }
 
+    if admission and admission.lock_fd is not None:
+        admission.update(
+            backend_pending=True, backend_kind="dispatching", backend_job_id=None
+        )
     async with _get_http_client() as client:
         try:
             resp = await client.post(
@@ -727,6 +997,8 @@ async def _call_analyzer_background(
 
         job_data = AnalyzerJobResponse(**resp.json())
         analyzer_job_id = job_data.job_id
+        if admission and admission.lock_fd is not None:
+            admission.update(backend_kind="highlights", backend_job_id=analyzer_job_id)
 
         while True:
             await asyncio.sleep(POLL_INTERVAL)
@@ -757,6 +1029,12 @@ async def _call_analyzer_background(
                     frames_total=job_status.progress.frames_total,
                 )
 
+            if (
+                job_status.status in ("completed", "failed")
+                and admission
+                and admission.lock_fd is not None
+            ):
+                admission.update(backend_pending=False)
             if job_status.status == "completed":
                 return job_status.result
 

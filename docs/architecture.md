@@ -138,7 +138,7 @@ docker volume create shared-data
 
 ## ジョブストア
 
-`app/job_store.py` にインメモリのジョブストア（`OrchestratorJobStore`）を実装。
+`app/job_store.py` のジョブストアはメモリ上の状態を `/shared-data/.state/jobs.json` に原子的に保存し、起動時に復元する。排他所有権と復旧記録は [受付設計](admission.md) を参照。
 
 - スレッドセーフ（`threading.Lock` で排他制御）
 - ジョブは UUID で管理
@@ -148,7 +148,8 @@ docker volume create shared-data
 
 ## 自動クリーンアップ
 
-- lifespan イベントで定期クリーンアップタスクを起動
+- lifespanで起動時照合と15秒ごとの中断復旧、定期クリーンアップを開始する
+- 実行中または復旧待ちの記録がある間はファイルの期限削除を停止する
 - `CLEANUP_INTERVAL`（デフォルト 3600 秒 = 1時間）ごとに実行
 - `CLEANUP_MAX_AGE`（デフォルト 3600 秒 = 1時間）より古い完了済みジョブを削除
 - ジョブストアからの削除と、関連ファイル（mp4, analysis JSON）の物理削除を行う
@@ -169,7 +170,7 @@ docker volume create shared-data
 
 ### 非同期パイプライン
 
-- WebSocket でアップロードを受け付け、即座に job_id を返す
+- WebSocketの開始メッセージを検証し、空きの場合だけreadyを返す。アップロード完了後にjob_idを返す
 - パイプラインはバックグラウンドタスクとして非同期実行
 - クライアントは REST API でポーリングして進捗・結果を取得
 - analyzer は非同期ジョブAPI を使用し、ポーリングで完了を待機
@@ -193,5 +194,5 @@ docker volume create shared-data
 ### 一時ファイル管理
 
 - アップロード動画は `{job_id}_{filename}` で保存（衝突回避）
-- パイプライン完了後（成功・失敗問わず）にアップロード一時ファイルを削除
+- パイプライン終了後、別サービスの実処理終了を確認してからアップロード一時ファイルを削除。状態不明・解析継続中は保持する
 - 結果ファイル（zip, mp4, JSON）は自動クリーンアップで期限切れ後に削除

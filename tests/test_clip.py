@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +13,7 @@ import pytest
 from app.clip import (
     ClipError,
     _build_filter_complex,
+    _run_ffmpeg,
     clip_video_async,
     process_clip,
 )
@@ -214,3 +218,76 @@ class TestClipVideoAsync:
         mock_process.assert_called_once_with(
             input_file, segments, output_file, intro=False
         )
+
+    async def test_cancellation_waits_for_converter(self, tmp_path):
+        started = threading.Event()
+        finish = threading.Event()
+
+        def convert(*args, **kwargs):
+            started.set()
+            assert finish.wait(timeout=5)
+
+        with patch("app.clip.process_clip", side_effect=convert):
+            task = asyncio.create_task(
+                clip_video_async(tmp_path / "in", [], tmp_path / "out")
+            )
+            await asyncio.to_thread(started.wait, 5)
+            task.cancel()
+            try:
+                await asyncio.sleep(0)
+                assert not task.done()
+            finally:
+                finish.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+
+def test_ffmpeg_reports_pid_and_inherits_admission_descriptor():
+    process = MagicMock(pid=123, returncode=0)
+    process.communicate.return_value = ("output", "")
+    events = []
+    with (
+        patch("app.clip.subprocess.Popen", return_value=process) as spawn,
+        patch("app.clip.PROCESS_LOCK_FD", 7),
+        patch("app.clip.PROCESS_OBSERVER", side_effect=events.append),
+    ):
+        result = _run_ffmpeg(["-version"])
+    assert spawn.call_args.kwargs["pass_fds"] == (7,)
+    assert result.stdout == "output"
+    assert events == [123, None]
+    process.communicate.assert_called_once_with(timeout=600)
+    process.kill.assert_not_called()
+
+
+def test_ffmpeg_timeout_kills_and_reaps_before_clear_pid():
+    process = MagicMock(pid=123, returncode=-9)
+    events = []
+    timeout = subprocess.TimeoutExpired("ffmpeg", 600)
+    process.communicate.side_effect = [timeout, ("", "")]
+    process.kill.side_effect = lambda: events.append("kill")
+
+    def observe(pid):
+        if pid is None:
+            assert process.communicate.call_count == 2
+        events.append(pid)
+
+    with (
+        patch("app.clip.subprocess.Popen", return_value=process),
+        patch("app.clip.PROCESS_OBSERVER", side_effect=observe),
+        pytest.raises(subprocess.TimeoutExpired),
+    ):
+        _run_ffmpeg(["-version"])
+    assert events == [123, "kill", None]
+
+
+def test_observer_failure_still_kills_and_reaps_child():
+    process = MagicMock(pid=123, returncode=-9)
+    process.communicate.return_value = ("", "")
+    with (
+        patch("app.clip.subprocess.Popen", return_value=process),
+        patch("app.clip.PROCESS_OBSERVER", side_effect=[OSError("disk full"), None]),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        _run_ffmpeg(["-version"])
+    process.kill.assert_called_once()
+    process.communicate.assert_called_once_with()

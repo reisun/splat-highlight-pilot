@@ -37,6 +37,10 @@ def shared_dir(tmp_path):
 def client(shared_dir):
     with (
         patch("app.main.SHARED_DATA_DIR", shared_dir),
+        patch(
+            "app.main._backend_state",
+            AsyncMock(return_value={"busy": False, "operations": []}),
+        ),
         TestClient(app) as c,
     ):
         yield c
@@ -45,9 +49,11 @@ def client(shared_dir):
 @pytest.fixture(autouse=True)
 def _clear_jobs():
     """各テスト前後にジョブストアをクリアする."""
+    orchestrator_jobs._storage_path = None
     orchestrator_jobs._jobs.clear()
     yield
     orchestrator_jobs._jobs.clear()
+    orchestrator_jobs._storage_path = None
 
 
 SAMPLE_HIGHLIGHTS = [
@@ -67,6 +73,7 @@ def _send_upload(ws, video_data=b"fake-video-data"):
             "size": len(video_data),
         }
     )
+    assert ws.receive_json()["type"] == "ready"
     ws.send_bytes(video_data)
     upload_progress = ws.receive_json()
     ws.send_json({"type": "upload_complete"})
@@ -226,6 +233,7 @@ class TestWebSocketUpload:
                     },
                 }
             )
+            assert ws.receive_json()["type"] == "ready"
             ws.send_bytes(video_data)
             ws.receive_json()  # progress
             ws.send_json({"type": "upload_complete"})
@@ -431,6 +439,7 @@ class TestMultiMatchPipeline:
                     },
                 }
             )
+            assert ws.receive_json()["type"] == "ready"
             ws.send_bytes(video_data)
             ws.receive_json()  # progress
             ws.send_json({"type": "upload_complete"})
@@ -546,6 +555,7 @@ class TestMultiMatchPipeline:
                     "options": {"per_match": True},
                 }
             )
+            assert ws.receive_json()["type"] == "ready"
             ws.send_bytes(video_data)
             ws.receive_json()  # progress
             ws.send_json({"type": "upload_complete"})
@@ -594,6 +604,7 @@ class TestMultiMatchPipeline:
                     "options": {"per_match": True},
                 }
             )
+            assert ws.receive_json()["type"] == "ready"
             ws.send_bytes(video_data)
             ws.receive_json()
             ws.send_json({"type": "upload_complete"})

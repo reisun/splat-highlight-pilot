@@ -74,6 +74,10 @@ async def upload_video(file_path: Path) -> str:
             "size": file_size,
         }))
 
+        admission = json.loads(await ws.recv())
+        if admission["type"] != "ready":
+            raise RuntimeError(admission.get("message", "Upload rejected"))
+
         sent = 0
         with open(file_path, "rb") as f:
             while chunk := f.read(CHUNK_SIZE):

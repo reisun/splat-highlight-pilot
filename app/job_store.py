@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -82,12 +83,42 @@ class OrchestratorJobStore:
     def __init__(self) -> None:
         self._jobs: dict[str, OrchestratorJob] = {}
         self._lock = threading.Lock()
+        self._storage_path: Path | None = None
+        self.on_change = None
+
+    def configure(self, path: Path) -> None:
+        """Restore durable job metadata; videos stay outside this state file."""
+        with self._lock:
+            self._storage_path = path
+            self._jobs.clear()
+            if not path.exists():
+                return
+            for data in json.loads(path.read_text()).values():
+                data["phase"] = JobPhase(data["phase"])
+                data["analyzer_progress"] = AnalyzerProgress(
+                    **data["analyzer_progress"]
+                )
+                data["match_progress"] = MatchProgress(**data["match_progress"])
+                data["highlights"] = [HighlightInfo(**h) for h in data["highlights"]]
+                self._jobs[data["job_id"]] = OrchestratorJob(**data)
+
+    def _save(self, job: OrchestratorJob | None = None) -> None:
+        if self._storage_path:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._storage_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps({k: asdict(v) for k, v in self._jobs.items()})
+            )
+            temporary.replace(self._storage_path)
+        if job and self.on_change:
+            self.on_change(job)
 
     def create(self) -> OrchestratorJob:
         job_id = str(uuid.uuid4())
         job = OrchestratorJob(job_id=job_id)
         with self._lock:
             self._jobs[job_id] = job
+            self._save(job)
         return job
 
     def get(self, job_id: str) -> OrchestratorJob | None:
@@ -99,18 +130,21 @@ class OrchestratorJobStore:
             job = self._jobs.get(job_id)
             if job:
                 job.phase = phase
+                self._save(job)
 
     def set_upload_path(self, job_id: str, path: str) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
                 job.upload_path = path
+                self._save(job)
 
     def set_filename(self, job_id: str, filename: str) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
                 job.filename = filename
+                self._save(job)
 
     def update_analyzer_progress(
         self,
@@ -129,6 +163,7 @@ class OrchestratorJobStore:
                     frames_done=frames_done,
                     frames_total=frames_total,
                 )
+                self._save(job)
 
     def update_match_progress(
         self,
@@ -143,12 +178,14 @@ class OrchestratorJobStore:
                     current_match=current_match,
                     total_matches=total_matches,
                 )
+                self._save(job)
 
     def set_highlights(self, job_id: str, highlights: list[HighlightInfo]) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
                 job.highlights = highlights
+                self._save(job)
 
     def mark_completed(self, job_id: str, download_url: str) -> None:
         with self._lock:
@@ -157,6 +194,7 @@ class OrchestratorJobStore:
                 job.phase = JobPhase.COMPLETED
                 job.download_url = download_url
                 job.completed_at = time.time()
+                self._save(job)
 
     def mark_failed(self, job_id: str, error: str) -> None:
         with self._lock:
@@ -165,6 +203,7 @@ class OrchestratorJobStore:
                 job.phase = JobPhase.FAILED
                 job.error = error
                 job.completed_at = time.time()
+                self._save(job)
 
     def cleanup_old(
         self,
@@ -195,6 +234,7 @@ class OrchestratorJobStore:
             for jid in to_remove:
                 del self._jobs[jid]
                 removed += 1
+            self._save()
         return removed
 
 

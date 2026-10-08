@@ -6,11 +6,14 @@ import asyncio
 import json
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 FFMPEG_TIMEOUT = 600
+PROCESS_LOCK_FD: int | None = None
+PROCESS_OBSERVER: Callable[[int | None], None] | None = None
 
 INTRO_VIDEO = Path(__file__).resolve().parent.parent / "resources" / "title_movie_1.mp4"
 
@@ -23,12 +26,26 @@ def _run_ffmpeg(args: list[str]) -> subprocess.CompletedProcess[str]:
     """Run an FFmpeg command and raise ClipError on failure."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error", *args]
     logger.debug("Running: %s", " ".join(cmd))
-    result = subprocess.run(  # noqa: S603
+    process = subprocess.Popen(  # noqa: S603
         cmd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=FFMPEG_TIMEOUT,
+        pass_fds=(() if PROCESS_LOCK_FD is None else (PROCESS_LOCK_FD,)),
     )
+    try:
+        if PROCESS_OBSERVER is not None:
+            PROCESS_OBSERVER(process.pid)
+        stdout, stderr = process.communicate(timeout=FFMPEG_TIMEOUT)
+    except BaseException:
+        process.kill()
+        process.communicate()
+        raise
+    finally:
+        # Report stopped only after the child has been reaped, including timeout.
+        if PROCESS_OBSERVER is not None:
+            PROCESS_OBSERVER(None)
+    result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
     if result.returncode != 0:
         raise ClipError(f"FFmpeg failed: {result.stderr.strip()}")
     return result
@@ -202,6 +219,12 @@ async def clip_video_async(
 ) -> None:
     """Async wrapper around process_clip."""
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
+    future = loop.run_in_executor(
         None, lambda: process_clip(input_path, segments, output_path, intro=intro)
     )
+    try:
+        await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # Cancellation must not release admission while the converter still runs.
+        await asyncio.shield(future)
+        raise
