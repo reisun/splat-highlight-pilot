@@ -55,7 +55,24 @@ curl http://localhost:8030/health
 ## WebUI
 
 `web/` ディレクトリに React + Vite で構築されたフロントエンドがある。
-GitHub Pages にデプロイして使用する。
+GitHub Pages にデプロイして使用する。API は Cloudflare Quick Tunnel から公開し、Caddy は使用しない。
+
+Pages は起動時に同じディレクトリの `config.json` をキャッシュせず読み込み、
+`apiBaseUrl` を HTTP、WebSocket、ダウンロードに共通で使用する。
+本番で設定がない場合は画面にエラーを表示する。ローカル開発は従来の
+`VITE_API_BASE_URL` または同一 origin にフォールバックする。
+
+トンネル起動・URL 検出は `../reverse-proxy/scripts/quick-tunnels.py start splat-highlight-pilot` から実行する。
+検出した HTTPS origin をリポジトリ変数 `QUICK_TUNNEL_URL` に設定して
+`deploy-pages.yml` を `workflow_dispatch`（`api_base_url` に同じ URL を指定）で再実行すると、Pages 用
+`config.json` が生成される。URL 更新でソースのコミットは不要。
+手動設定例は `web/public/config.json.example` を参照。
+
+Quick Tunnel の接続先は `http://api:8000`、ヘルスチェックは `/health`。
+動画アップロードは WebSocket、進捗表示は HTTP ポーリングを使用し、SSE は使用しない。
+API の CORS は `https://reisun.github.io` とローカル開発 origin を許可する。
+起動スクリプトは `docker-compose.prod.yml` と `../reverse-proxy/tunnels/splat-highlight-pilot.yml` を組み合わせる。
+API のホストポート 8030 はローカル接続専用。外部ネットワークの override は不要。analyzer の接続先と共有データ volume は従来どおり必要。
 
 ## API エンドポイント
 

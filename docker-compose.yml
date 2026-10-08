@@ -2,7 +2,7 @@ services:
   api:
     build: .
     ports:
-      - "8030:8000"
+      - "127.0.0.1:8030:8000"
     volumes:
       - shared-data:/shared-data
       - .:/app

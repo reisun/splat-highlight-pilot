@@ -2,7 +2,7 @@ services:
   api:
     build: .
     ports:
-      - "8030:8000"
+      - "127.0.0.1:8030:8000"
     volumes:
       - shared-data:/shared-data
     environment:
@@ -12,19 +12,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    networks:
-      default:
-        aliases:
-          - splat-highlight-pilot-api
-      splat-highlight-pilot-net:
-        aliases:
-          - splat-highlight-pilot-api
 
 volumes:
   shared-data:
     name: shared-data
-
-networks:
-  default:
-  splat-highlight-pilot-net:
-    name: splat-highlight-pilot-net

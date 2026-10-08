@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+import { getApiBaseUrl } from "../config";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -15,7 +15,7 @@ export default function Header() {
 
   useEffect(() => {
     const uiBuildDate = __BUILD_DATE__;
-    const api = API_BASE_URL || window.location.origin;
+    const api = getApiBaseUrl();
 
     fetch(`${api}/health`)
       .then((r) => r.json())

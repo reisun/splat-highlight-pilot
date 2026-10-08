@@ -1178,3 +1178,27 @@ class TestFlattenClippedScores:
         _flatten_clipped_scores(frames, [])
         assert frames[0].score == 5
         assert frames[1].score == 10
+
+
+@pytest.mark.parametrize(
+    "origin", ["https://reisun.github.io", "http://localhost:5173"]
+)
+def test_pages_cors_preflight(client, origin):
+    response = client.options(
+        "/jobs/unknown",
+        headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_other_origins(client):
+    response = client.options(
+        "/jobs/unknown",
+        headers={
+            "Origin": "https://unrelated.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
